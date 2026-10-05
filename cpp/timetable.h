@@ -304,3 +304,57 @@ void printMRVStats(const std::string&         datasetSize,
                    const std::vector<Course>& courses,
                    const MRVResult&           result,
                    const ValidationReport&    report);
+
+// ─────────────────────────────────────────────────────────────────
+// Phase 4: Branch & Bound Soft-Constraint Optimizer
+// ─────────────────────────────────────────────────────────────────
+
+// Compute the GLOBAL soft-cost of a COMPLETE timetable.
+// Unlike the incremental softPenalty(), this function sees the full
+// assignment and also includes P4 (batch intra-day gap penalty).
+// Only call on timetables where every session is assigned.
+int globalPenalty(
+    const std::vector<Session>&                    sessions,
+    const std::unordered_map<std::string, Course>& courseMap
+);
+
+// Statistics produced by the B&B search
+struct BnBResult {
+    int    totalSessions{0};
+    int    scheduled{0};
+    int    unscheduled{0};
+    long   nodesExplored{0};    // recursive calls to bnbSolve
+    long   attemptsCount{0};    // candidate assignments actually tried
+    long   backtracks{0};       // assignments undone after recursion
+    long   prunedBranches{0};   // candidates skipped by cost bound
+    int    solutionsFound{0};   // complete feasible timetables encountered
+    int    bestCost{-1};        // soft cost of the best solution (-1 = none)
+    bool   feasible{false};
+    bool   timedOut{false};
+    double elapsedMs{0.0};
+};
+
+// Run Branch & Bound optimizer.
+//   courses          : loaded, filtered courses
+//   graph            : conflict graph (MRV tie-breaking)
+//   courseMap        : courseId -> Course
+//   sessions         : OUTPUT — sessions in the best solution found
+//   initialUpperBound: bestCost starts here; pass Greedy penalty for warm start
+//                      (pass a very large number to let B&B find first solution
+//                       unbiased, e.g. 2'000'000'000)
+//   timeLimitMs      : abort after this many ms (0 = no limit)
+BnBResult runBranchAndBound(
+    const std::vector<Course>&                     courses,
+    const ConflictGraph&                           graph,
+    const std::unordered_map<std::string, Course>& courseMap,
+    std::vector<Session>&                          sessions,
+    int                                            initialUpperBound = 2000000000,
+    double                                         timeLimitMs = 60000.0
+);
+
+// Print B&B statistics + validator report
+void printBnBStats(const std::string&         datasetSize,
+                   const std::vector<Course>& courses,
+                   const BnBResult&           result,
+                   const ValidationReport&    report,
+                   int                        greedyPenalty = -1);

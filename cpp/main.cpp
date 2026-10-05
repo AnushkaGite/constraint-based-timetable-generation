@@ -39,7 +39,7 @@ static std::string toUpper(std::string s)
     return s;
 }
 
-// ── Per-run result row (shared for greedy and MRV) ────────────────
+// ── Per-run result row (shared for greedy, MRV, BnB) ─────────────
 struct RunRow {
     std::string algo;
     std::string dataset;
@@ -48,6 +48,7 @@ struct RunRow {
     double ms{0.0};
     long   backtracks{-1};     // -1 means N/A (greedy)
     long   nodes{-1};
+    long   pruned{-1};         // B&B pruned branches (-1 = N/A)
     int    penalty{-1};
 };
 
@@ -129,6 +130,77 @@ static RunRow runMRVOne(const std::string& size,
     return row;
 }
 
+// ── Run BnB on one size ───────────────────────────────────────────
+static RunRow runBnBOne(const std::string& size,
+                        const std::string& csvPath,
+                        bool printTable,
+                        double timeLimitMs)
+{
+    RunRow row;
+    row.algo    = "BNB";
+    row.dataset = size;
+
+    std::vector<Course> courses;
+    if (!loadCSV(csvPath, size, courses) || courses.empty()) {
+        std::cerr << "[ERROR] Failed to load " << size << "\n";
+        return row;
+    }
+
+    auto courseMap = buildCourseMap(courses);
+    ConflictGraph graph;
+    graph.build(courses);
+
+    // ── Warm-start upper bound: run Greedy first ──────────────────
+    //    This lets B&B prune aggressively from the very first node.
+    std::vector<Session> greedySessions;
+    GreedyResult grRes = runGreedy(courses, graph, courseMap, greedySessions);
+    int greedyPenalty  = (grRes.unscheduled == 0) ? grRes.totalPenalty : 2000000000;
+
+    std::cout << "[INFO] Greedy warm-start penalty: " << greedyPenalty << "\n";
+
+    // ── Run B&B ───────────────────────────────────────────────────
+    std::vector<Session> sessions;
+    BnBResult res = runBranchAndBound(
+        courses, graph, courseMap, sessions,
+        greedyPenalty + 1,   // strict improvement: find cost < greedyPenalty
+        timeLimitMs);
+
+    // If B&B found no improvement, fall back to the Greedy solution
+    // so we always have a complete feasible timetable to validate.
+    bool usedGreedyFallback = false;
+    if (!res.feasible && grRes.unscheduled == 0) {
+        sessions           = greedySessions;
+        res.bestCost       = greedyPenalty;
+        res.feasible       = true;
+        res.scheduled      = grRes.scheduled;
+        res.unscheduled    = 0;
+        usedGreedyFallback = true;
+    }
+
+    ValidationReport report = validateTimetable(sessions, courseMap);
+    bool feasible = res.feasible && report.feasible;
+
+    // Report Greedy penalty for comparison (pass -1 if fallback used,
+    // since penalty is identical)
+    int gpForPrint = usedGreedyFallback ? -1 : (int)greedyPenalty;
+    printBnBStats(size, courses, res, report, gpForPrint);
+    if (usedGreedyFallback)
+        std::cout << "  [NOTE] B&B found no improvement over Greedy; "
+                     "Greedy solution is shown.\n";
+    if (printTable) printTimetable(sessions, courseMap);
+
+    row.courses    = (int)courses.size();
+    row.sessions   = res.totalSessions;
+    row.scheduled  = res.scheduled;
+    row.feasible   = feasible;
+    row.ms         = res.elapsedMs;
+    row.backtracks = res.backtracks;
+    row.nodes      = res.nodesExplored;
+    row.pruned     = res.prunedBranches;
+    row.penalty    = feasible ? res.bestCost : -1;
+    return row;
+}
+
 // ── Usage ─────────────────────────────────────────────────────────
 static void printUsage(const char* prog)
 {
@@ -163,9 +235,9 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (algo != "GREEDY" && algo != "MRV") {
+    if (algo != "GREEDY" && algo != "MRV" && algo != "BNB") {
         std::cerr << "[ERROR] Unknown algo: " << algo
-                  << ". Use greedy or mrv.\n";
+                  << ". Use greedy, mrv, or bnb.\n";
         return 1;
     }
 
@@ -186,7 +258,7 @@ int main(int argc, char* argv[])
     }
     std::cout << "[INFO] Using CSV     : " << csvPath << "\n";
     std::cout << "[INFO] Algorithm     : " << algo    << "\n";
-    if (algo == "MRV")
+    if (algo == "MRV" || algo == "BNB")
         std::cout << "[INFO] Time limit    : " << limitMs << " ms per size\n";
 
     // ── Run ──────────────────────────────────────────────────────
@@ -196,14 +268,18 @@ int main(int argc, char* argv[])
         if (algo == "GREEDY") {
             std::cout << "\n[INFO] Running GREEDY on " << sz << " ...\n";
             rows.push_back(runGreedyOne(sz, csvPath, printTable));
-        } else {
+        } else if (algo == "MRV") {
             std::cout << "\n[INFO] Running MRV on " << sz << " ...\n";
             rows.push_back(runMRVOne(sz, csvPath, printTable, limitMs));
+        } else {
+            std::cout << "\n[INFO] Running B&B on " << sz << " ...\n";
+            rows.push_back(runBnBOne(sz, csvPath, printTable, limitMs));
         }
     }
 
     // ── Summary table ─────────────────────────────────────────────
     bool isMRV = (algo == "MRV");
+    bool isBnB = (algo == "BNB");
     std::cout << "\n";
     std::cout << "========================================\n";
     std::cout << " SUMMARY TABLE  [" << algo << "]\n";
@@ -234,6 +310,38 @@ int main(int argc, char* argv[])
                                              ? std::to_string(r.backtracks) : "N/A")
                       << std::setw(12) << (r.nodes >= 0
                                              ? std::to_string(r.nodes) : "N/A")
+                      << std::setw(10) << (r.penalty >= 0
+                                             ? std::to_string(r.penalty) : "N/A")
+                      << "\n";
+        }
+    } else if (isBnB) {
+        std::cout << std::left
+                  << std::setw(9)  << "Dataset"
+                  << std::setw(9)  << "Courses"
+                  << std::setw(10) << "Sessions"
+                  << std::setw(11) << "Scheduled"
+                  << std::setw(10) << "Feasible"
+                  << std::setw(10) << "Time(ms)"
+                  << std::setw(12) << "Backtracks"
+                  << std::setw(12) << "Nodes"
+                  << std::setw(12) << "Pruned"
+                  << std::setw(10) << "Penalty"
+                  << "\n";
+        std::cout << std::string(105, '-') << "\n";
+        for (const auto& r : rows) {
+            std::cout << std::left
+                      << std::setw(9)  << r.dataset
+                      << std::setw(9)  << r.courses
+                      << std::setw(10) << r.sessions
+                      << std::setw(11) << r.scheduled
+                      << std::setw(10) << (r.feasible ? "YES" : "NO")
+                      << std::setw(10) << std::fixed << std::setprecision(2) << r.ms
+                      << std::setw(12) << (r.backtracks >= 0
+                                             ? std::to_string(r.backtracks) : "N/A")
+                      << std::setw(12) << (r.nodes >= 0
+                                             ? std::to_string(r.nodes) : "N/A")
+                      << std::setw(12) << (r.pruned >= 0
+                                             ? std::to_string(r.pruned) : "N/A")
                       << std::setw(10) << (r.penalty >= 0
                                              ? std::to_string(r.penalty) : "N/A")
                       << "\n";
