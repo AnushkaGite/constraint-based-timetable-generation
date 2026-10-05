@@ -7,6 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(timetable_solver
     main.cpp
     timetable.cpp
+    constraint_checker.cpp
+    greedy.cpp
+    mrv.cpp
 )
 
 target_include_directories(timetable_solver PRIVATE .)
