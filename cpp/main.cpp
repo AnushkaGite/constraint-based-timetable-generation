@@ -159,10 +159,13 @@ static RunRow runBnBOne(const std::string& size,
     std::cout << "[INFO] Greedy warm-start penalty: " << greedyPenalty << "\n";
 
     // ── Run B&B ───────────────────────────────────────────────────
+    // Use a large initial upper bound so B&B always stores the first
+    // feasible solution it finds (the greedy penalty is only for comparison).
+    // B&B will then continue within the time limit to try to improve.
     std::vector<Session> sessions;
     BnBResult res = runBranchAndBound(
         courses, graph, courseMap, sessions,
-        greedyPenalty + 1,   // strict improvement: find cost < greedyPenalty
+        2000000000,  // always store first solution found, then improve
         timeLimitMs);
 
     // If B&B found no improvement, fall back to the Greedy solution
