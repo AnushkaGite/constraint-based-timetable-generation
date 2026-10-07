@@ -358,3 +358,48 @@ void printBnBStats(const std::string&         datasetSize,
                    const BnBResult&           result,
                    const ValidationReport&    report,
                    int                        greedyPenalty = -1);
+
+// ─────────────────────────────────────────────────────────────────
+// Phase 5: OpenMP Parallel Branch & Bound
+// ─────────────────────────────────────────────────────────────────
+
+struct PBnBResult {
+    int    totalSessions{0};
+    int    scheduled{0};
+    int    unscheduled{0};
+    long   nodesExplored{0};
+    long   attemptsCount{0};
+    long   backtracks{0};
+    long   prunedBranches{0};
+    int    solutionsFound{0};
+    int    bestCost{-1};
+    bool   feasible{false};
+    bool   timedOut{false};
+    int    threadsUsed{0};
+    double elapsedMs{0.0};
+};
+
+// Run the OpenMP parallel Branch & Bound optimizer.
+//   numThreads       : 0 = use OMP_NUM_THREADS / hardware concurrency
+//   initialUpperBound: pass a large value so B&B always stores the first
+//                      feasible solution it finds (2'000'000'000 = unlimited)
+//   timeLimitMs      : wall-clock limit; 0 = no limit
+PBnBResult runParallelBranchAndBound(
+    const std::vector<Course>&                     courses,
+    const ConflictGraph&                           graph,
+    const std::unordered_map<std::string, Course>& courseMap,
+    std::vector<Session>&                          sessions,
+    int                                            numThreads        = 0,
+    int                                            initialUpperBound = 2000000000,
+    double                                         timeLimitMs       = 30000.0
+);
+
+// Print parallel B&B statistics + validator report.
+// seqPenalty: sequential B&B penalty for comparison (-1 = not available).
+void printPBnBStats(
+    const std::string&         datasetSize,
+    const std::vector<Course>& courses,
+    const PBnBResult&          result,
+    const ValidationReport&    report,
+    int                        seqPenalty = -1
+);
