@@ -1,0 +1,5 @@
+Dataset,Algorithm,Threads,Courses,Sessions,Scheduled,Feasible,TimedOut,Runtime_ms,Nodes,Attempts,Backtracks,Pruned,Penalty,Sequential_Runtime_ms,Parallel_Runtime_ms,Speedup,Efficiency
+SMALL,GREEDY,1,10,33,33,YES,NO,4.56,N/A,3135,N/A,N/A,62,N/A,N/A,N/A,N/A
+SMALL,MRV,1,10,33,33,YES,NO,19.02,34,33,0,N/A,722,N/A,N/A,N/A,N/A
+SMALL,BNB,1,10,33,33,YES,YES,15000.19,177282,177281,177250,10186398,62,15000.19,N/A,N/A,N/A
+SMALL,PBNB,4,10,33,33,YES,YES,15001.61,709706,709706,709566,40866946,62,15000.19,15001.61,1.00,0.25
