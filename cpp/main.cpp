@@ -1,11 +1,13 @@
 #include "timetable.h"
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <iomanip>
 #include <algorithm>
+
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -43,6 +45,7 @@ static std::string toUpper(std::string s)
 struct RunRow {
     std::string algo;
     std::string dataset;
+    int  threads{1};           // 1 for sequential, P for PBNB
     int  courses{0}, sessions{0}, scheduled{0};
     bool feasible{false};
     bool timedOut{false};
@@ -52,7 +55,14 @@ struct RunRow {
     long   attempts{-1};
     long   pruned{-1};         // B&B pruned branches (-1 = N/A)
     int    penalty{-1};
+
+    // Parallel comparison metrics
+    double seqMs{-1.0};        // Sequential B&B runtime
+    double parMs{-1.0};        // Parallel B&B runtime
+    double speedup{-1.0};      // seqMs / parMs
+    double efficiency{-1.0};   // speedup / threads
 };
+
 
 // ─────────────────────────────────────────────────────────────────
 // Per-algorithm single-size runners
@@ -224,6 +234,8 @@ static RunRow runBnBOne(const std::string& size,
     row.attempts   = res.attemptsCount;
     row.pruned     = res.prunedBranches;
     row.penalty    = feasible ? res.bestCost : -1;
+    row.threads    = 1;
+    row.seqMs      = res.elapsedMs;
     return row;
 }
 
@@ -275,73 +287,174 @@ static RunRow runPBnBOne(const std::string& size,
     row.attempts   = res.attemptsCount;
     row.pruned     = res.prunedBranches;
     row.penalty    = feasible ? res.bestCost : -1;
+    row.threads    = (res.threadsUsed > 0) ? res.threadsUsed : (numThreads > 0 ? numThreads : 1);
+    row.parMs      = res.elapsedMs;
     return row;
 }
 
-// Benchmark infrastructure
+// Benchmark infrastructure & CSV Export
 // ─────────────────────────────────────────────────────────────────
+
+// Write benchmark results to CSV (appends if file exists, writes header if new)
+static void writeBenchmarkCSV(const std::string& csvFilePath, const std::vector<RunRow>& rows)
+{
+    bool fileExists = false;
+    {
+        std::ifstream f(csvFilePath);
+        if (f.good()) fileExists = true;
+    }
+
+    std::ofstream out(csvFilePath, std::ios::app);
+    if (!out.is_open()) {
+        std::cerr << "[WARN] Could not open " << csvFilePath << " for writing.\n";
+        return;
+    }
+
+    if (!fileExists) {
+        out << "Dataset,Algorithm,Threads,Courses,Sessions,Scheduled,Feasible,TimedOut,"
+            << "Runtime_ms,Nodes,Attempts,Backtracks,Pruned,Penalty,"
+            << "Sequential_Runtime_ms,Parallel_Runtime_ms,Speedup,Efficiency\n";
+    }
+
+    auto naLong = [](long v) -> std::string { return v >= 0 ? std::to_string(v) : "N/A"; };
+    auto naInt  = [](int v)  -> std::string { return v >= 0 ? std::to_string(v) : "N/A"; };
+    auto naDbl  = [](double v) -> std::string {
+        if (v < 0.0) return "N/A";
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2) << v;
+        return ss.str();
+    };
+
+    for (const auto& r : rows) {
+        out << r.dataset << ","
+            << r.algo << ","
+            << r.threads << ","
+            << r.courses << ","
+            << r.sessions << ","
+            << r.scheduled << ","
+            << (r.feasible ? "YES" : "NO") << ","
+            << (r.timedOut ? "YES" : "NO") << ","
+            << std::fixed << std::setprecision(2) << r.ms << ","
+            << naLong(r.nodes) << ","
+            << naLong(r.attempts) << ","
+            << naLong(r.backtracks) << ","
+            << naLong(r.pruned) << ","
+            << naInt(r.penalty) << ","
+            << naDbl(r.seqMs) << ","
+            << naDbl(r.parMs) << ","
+            << naDbl(r.speedup) << ","
+            << naDbl(r.efficiency) << "\n";
+    }
+    std::cout << "[INFO] Benchmark results saved to: " << csvFilePath << "\n";
+}
 
 // Print one row of the unified benchmark table
 static void printBenchRow(const RunRow& r)
 {
-    // Algo (7), Dataset (8), Sessions(10), Sched(8),
-    // Feasible(10), Time(ms)(12),
-    // Nodes(12), Attempts(12), Backtracks(12), Pruned(12), Penalty(10)
     auto na  = [](long v)  { return v >= 0 ? std::to_string(v) : "N/A"; };
     auto nai = [](int  v)  { return v >= 0 ? std::to_string(v) : "N/A"; };
 
     std::cout << std::left
-              << std::setw(7)  << r.algo
-              << std::setw(8)  << r.dataset
+              << std::setw(9)  << r.dataset
+              << std::setw(10) << r.algo
+              << std::setw(9)  << (r.algo == "PBNB" ? std::to_string(r.threads) : "1")
+              << std::setw(9)  << r.courses
               << std::setw(10) << r.sessions
-              << std::setw(8)  << r.scheduled;
-
-    // Feasible — append * if timed out
-    std::string feas = r.feasible ? "YES" : "NO";
-    if (r.timedOut) feas += "*";
-    std::cout << std::setw(10) << feas;
-
-    std::cout << std::setw(12) << std::fixed << std::setprecision(1) << r.ms
-              << std::setw(12) << na(r.nodes)
-              << std::setw(12) << na(r.attempts)
+              << std::setw(11) << (std::to_string(r.scheduled) + "/" + std::to_string(r.sessions))
+              << std::setw(10) << (r.feasible ? "YES" : "NO")
+              << std::setw(10) << (r.timedOut ? "YES" : "NO")
+              << std::setw(13) << std::fixed << std::setprecision(1) << r.ms
+              << std::setw(11) << na(r.nodes)
+              << std::setw(11) << na(r.attempts)
               << std::setw(12) << na(r.backtracks)
               << std::setw(12) << na(r.pruned)
-              << std::setw(10) << nai(r.penalty)
+              << std::setw(9)  << nai(r.penalty)
               << "\n";
 }
 
-// Print the complete unified benchmark table from all collected rows
-static void printBenchmarkTable(const std::vector<RunRow>& rows,
-                                const std::vector<std::string>& sizes,
-                                double mrvLimitMs, double bnbLimitMs)
+// Print Parallel Scaling & Speedup Table
+static void printParallelScalingTable(const std::vector<RunRow>& rows)
 {
+    bool hasParallel = false;
+    for (const auto& r : rows) {
+        if (r.algo == "PBNB" && r.speedup >= 0.0) {
+            hasParallel = true;
+            break;
+        }
+    }
+    if (!hasParallel) return;
+
     const int W = 115;
     std::cout << "\n" << std::string(W, '=') << "\n";
-    std::cout << " SEQUENTIAL BENCHMARK — Greedy / MRV / Branch & Bound\n";
+    std::cout << " PARALLEL B&B SPEEDUP & EFFICIENCY COMPARISON\n";
+    std::cout << " Formulae: Speedup = Sequential_Runtime_ms / Parallel_Runtime_ms | Efficiency = Speedup / Threads\n";
+    std::cout << std::string(W, '=') << "\n";
+    std::cout << std::left
+              << std::setw(9)  << "Dataset"
+              << std::setw(9)  << "Threads"
+              << std::setw(18) << "Seq_Time(ms)"
+              << std::setw(18) << "Par_Time(ms)"
+              << std::setw(12) << "Speedup"
+              << std::setw(14) << "Efficiency"
+              << std::setw(10) << "Feasible"
+              << std::setw(10) << "Penalty"
+              << "\n";
+    std::cout << std::string(W, '-') << "\n";
+
+    for (const auto& r : rows) {
+        if (r.algo != "PBNB" || r.speedup < 0.0) continue;
+        std::ostringstream spStr, effStr;
+        spStr << std::fixed << std::setprecision(2) << r.speedup << "x";
+        effStr << std::fixed << std::setprecision(1) << (r.efficiency * 100.0) << "%";
+
+        std::cout << std::left
+                  << std::setw(9)  << r.dataset
+                  << std::setw(9)  << r.threads
+                  << std::setw(18) << std::fixed << std::setprecision(1) << r.seqMs
+                  << std::setw(18) << std::fixed << std::setprecision(1) << r.parMs
+                  << std::setw(12) << spStr.str()
+                  << std::setw(14) << effStr.str()
+                  << std::setw(10) << (r.feasible ? "YES" : "NO")
+                  << std::setw(10) << (r.penalty >= 0 ? std::to_string(r.penalty) : "N/A")
+                  << "\n";
+    }
+    std::cout << std::string(W, '=') << "\n\n";
+}
+
+// Print complete unified benchmark table from all collected rows
+static void printBenchmarkTable(const std::vector<RunRow>& rows,
+                                const std::vector<std::string>& sizes,
+                                double mrvLimitMs, double bnbLimitMs, double pbnbLimitMs)
+{
+    const int W = 138;
+    std::cout << "\n" << std::string(W, '=') << "\n";
+    std::cout << " UNIFIED BENCHMARK — Greedy / MRV / Sequential B&B / Parallel B&B\n";
     std::cout << " Sizes: ";
     for (size_t i = 0; i < sizes.size(); ++i)
         std::cout << sizes[i] << (i+1 < sizes.size() ? ", " : "");
     std::cout << "\n";
-    std::cout << " MRV time limit: " << (int)(mrvLimitMs/1000) << " s per size"
-              << "   |   B&B time limit: " << (int)(bnbLimitMs/1000) << " s per size"
-              << "   |   * = timed out (best-found reported)\n";
-    std::cout << " NOTE: B&B time INCLUDES its internal Greedy warm-start."
-                 " Greedy rows are timed independently.\n";
+    std::cout << " MRV limit: " << (int)(mrvLimitMs/1000) << " s"
+              << " | Seq B&B limit: " << (int)(bnbLimitMs/1000) << " s"
+              << " | Parallel B&B limit: " << (int)(pbnbLimitMs/1000) << " s"
+              << " | Note: TimedOut indicates search reached time limit\n";
     std::cout << std::string(W, '=') << "\n";
 
     // Header
     std::cout << std::left
-              << std::setw(7)  << "Algo"
-              << std::setw(8)  << "Dataset"
+              << std::setw(9)  << "Dataset"
+              << std::setw(10) << "Algorithm"
+              << std::setw(9)  << "Threads"
+              << std::setw(9)  << "Courses"
               << std::setw(10) << "Sessions"
-              << std::setw(8)  << "Sched"
+              << std::setw(11) << "Scheduled"
               << std::setw(10) << "Feasible"
-              << std::setw(12) << "Time(ms)"
-              << std::setw(12) << "Nodes"
-              << std::setw(12) << "Attempts"
+              << std::setw(10) << "TimedOut"
+              << std::setw(13) << "Runtime_ms"
+              << std::setw(11) << "Nodes"
+              << std::setw(11) << "Attempts"
               << std::setw(12) << "Backtracks"
               << std::setw(12) << "Pruned"
-              << std::setw(10) << "Penalty"
+              << std::setw(9)  << "Penalty"
               << "\n";
     std::cout << std::string(W, '-') << "\n";
 
@@ -354,62 +467,82 @@ static void printBenchmarkTable(const std::vector<RunRow>& rows,
         printBenchRow(r);
     }
 
-    std::cout << std::string(W, '=') << "\n\n";
+    std::cout << std::string(W, '=') << "\n";
+
+    printParallelScalingTable(rows);
 }
 
-// Run the full sequential benchmark
+// Run the full unified benchmark
 static void runBenchmark(const std::vector<std::string>& sizes,
                          const std::string& csvPath,
                          double mrvLimitMs,
-                         double bnbLimitMs)
+                         double bnbLimitMs,
+                         double pbnbLimitMs,
+                         int threads,
+                         const std::string& exportCsvPath)
 {
     std::vector<RunRow> rows;
-    rows.reserve(sizes.size() * 3);
+    rows.reserve(sizes.size() * 4);
 
     for (const auto& sz : sizes) {
         std::cout << "\n[BENCH] ── " << sz << " ──────────────────────────\n";
 
-        // ── Greedy ───────────────────────────────────────────────
+        // ── 1. Greedy ─────────────────────────────────────────────
         std::cout << "[BENCH] " << sz << " GREEDY ...\n";
-        rows.push_back(runGreedyOne(sz, csvPath,
-                                    /*printTable=*/false,
-                                    /*quiet=*/true));
+        rows.push_back(runGreedyOne(sz, csvPath, /*printTable=*/false, /*quiet=*/true));
         const RunRow& gr = rows.back();
         std::cout << "        scheduled=" << gr.scheduled << "/" << gr.sessions
                   << "  feasible=" << (gr.feasible ? "YES" : "NO")
                   << "  penalty=" << (gr.penalty >= 0 ? std::to_string(gr.penalty) : "N/A")
                   << "  time=" << std::fixed << std::setprecision(1) << gr.ms << " ms\n";
 
-        // ── MRV ──────────────────────────────────────────────────
-        std::cout << "[BENCH] " << sz << " MRV (limit "
-                  << (int)(mrvLimitMs/1000) << " s) ...\n";
-        rows.push_back(runMRVOne(sz, csvPath,
-                                  /*printTable=*/false,
-                                  mrvLimitMs,
-                                  /*quiet=*/true));
+        // ── 2. MRV ────────────────────────────────────────────────
+        std::cout << "[BENCH] " << sz << " MRV (limit " << (int)(mrvLimitMs/1000) << " s) ...\n";
+        rows.push_back(runMRVOne(sz, csvPath, /*printTable=*/false, mrvLimitMs, /*quiet=*/true));
         const RunRow& mr = rows.back();
         std::cout << "        scheduled=" << mr.scheduled << "/" << mr.sessions
                   << "  feasible=" << (mr.feasible ? "YES" : "NO")
-                  << (mr.timedOut ? "*" : "")
+                  << (mr.timedOut ? " (timed out)" : "")
                   << "  penalty=" << (mr.penalty >= 0 ? std::to_string(mr.penalty) : "N/A")
                   << "  time=" << std::fixed << std::setprecision(1) << mr.ms << " ms\n";
 
-        // ── B&B ───────────────────────────────────────────────────
-        std::cout << "[BENCH] " << sz << " B&B (limit "
-                  << (int)(bnbLimitMs/1000) << " s, includes internal Greedy warm-start) ...\n";
-        rows.push_back(runBnBOne(sz, csvPath,
-                                  /*printTable=*/false,
-                                  bnbLimitMs,
-                                  /*quiet=*/true));
-        const RunRow& br = rows.back();
+        // ── 3. Sequential B&B ─────────────────────────────────────
+        std::cout << "[BENCH] " << sz << " Sequential B&B (limit " << (int)(bnbLimitMs/1000) << " s) ...\n";
+        RunRow br = runBnBOne(sz, csvPath, /*printTable=*/false, bnbLimitMs, /*quiet=*/true);
+        rows.push_back(br);
         std::cout << "        scheduled=" << br.scheduled << "/" << br.sessions
                   << "  feasible=" << (br.feasible ? "YES" : "NO")
-                  << (br.timedOut ? "*" : "")
+                  << (br.timedOut ? " (timed out)" : "")
                   << "  bestPenalty=" << (br.penalty >= 0 ? std::to_string(br.penalty) : "N/A")
                   << "  time=" << std::fixed << std::setprecision(1) << br.ms << " ms\n";
+
+        // ── 4. Parallel B&B (OpenMP) ──────────────────────────────
+        std::cout << "[BENCH] " << sz << " Parallel B&B (limit " << (int)(pbnbLimitMs/1000)
+                  << " s, threads=" << (threads > 0 ? std::to_string(threads) : "auto") << ") ...\n";
+        RunRow pbr = runPBnBOne(sz, csvPath, /*printTable=*/false, pbnbLimitMs, threads, /*quiet=*/true);
+
+        if (br.ms > 0.0 && pbr.ms > 0.0) {
+            pbr.seqMs = br.ms;
+            pbr.parMs = pbr.ms;
+            pbr.speedup = br.ms / pbr.ms;
+            int effThreads = pbr.threads > 0 ? pbr.threads : (threads > 0 ? threads : 1);
+            pbr.efficiency = pbr.speedup / effThreads;
+        }
+        rows.push_back(pbr);
+        std::cout << "        scheduled=" << pbr.scheduled << "/" << pbr.sessions
+                  << "  feasible=" << (pbr.feasible ? "YES" : "NO")
+                  << (pbr.timedOut ? " (timed out)" : "")
+                  << "  bestPenalty=" << (pbr.penalty >= 0 ? std::to_string(pbr.penalty) : "N/A")
+                  << "  time=" << std::fixed << std::setprecision(1) << pbr.ms << " ms";
+        if (pbr.speedup >= 0.0) {
+            std::cout << "  speedup=" << std::fixed << std::setprecision(2) << pbr.speedup << "x"
+                      << "  efficiency=" << std::fixed << std::setprecision(1) << (pbr.efficiency * 100.0) << "%";
+        }
+        std::cout << "\n";
     }
 
-    printBenchmarkTable(rows, sizes, mrvLimitMs, bnbLimitMs);
+    printBenchmarkTable(rows, sizes, mrvLimitMs, bnbLimitMs, pbnbLimitMs);
+    writeBenchmarkCSV(exportCsvPath, rows);
 }
 
 // ── Usage ─────────────────────────────────────────────────────────
@@ -419,14 +552,18 @@ static void printUsage(const char* prog)
               << "  " << prog
               << " <SMALL|MEDIUM|LARGE|XLARGE|ALL>"
               << " [--algo greedy|mrv|bnb|pbnb]"
-              << " [--time-limit <ms>] [--threads <n>]\n"
+              << " [--time-limit <ms>] [--threads <n>] [--csv <file>]\n"
               << "  Default algo  : mrv\n"
               << "  Default limit : 60000 ms per dataset size\n\n"
-              << "Usage (sequential benchmark):\n"
+              << "Usage (unified benchmark):\n"
               << "  " << prog << " --benchmark [SMALL] [MEDIUM] [LARGE] [XLARGE]\n"
-              << "  (no sizes = run all four)\n"
+              << "  (no sizes = run all four sizes)\n"
+              << "  [--threads <n>]     default 4\n"
+              << "  [--time-limit <ms>] set limit for all algorithms\n"
               << "  [--mrv-limit <ms>]  default 60000\n"
-              << "  [--bnb-limit <ms>]  default 30000\n";
+              << "  [--bnb-limit <ms>]  default 30000\n"
+              << "  [--pbnb-limit <ms>] default 30000\n"
+              << "  [--csv <file>]      default benchmark_results.csv\n";
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -443,17 +580,33 @@ int main(int argc, char* argv[])
         // Collect optional size args after --benchmark; default = all four
         const std::vector<std::string> allSizes = {"SMALL","MEDIUM","LARGE","XLARGE"};
         std::vector<std::string> benchSizes;
-        double mrvLimitMs = 60000.0;
-        double bnbLimitMs = 30000.0;
+        double mrvLimitMs  = 60000.0;
+        double bnbLimitMs  = 30000.0;
+        double pbnbLimitMs = 30000.0;
+        int    threads     = 4; // default benchmark threads
+        std::string exportCsv = "benchmark_results.csv";
 
         for (int i = 2; i < argc; ++i) {
             std::string a = toUpper(argv[i]);
             if (a == "SMALL" || a == "MEDIUM" || a == "LARGE" || a == "XLARGE") {
                 benchSizes.push_back(a);
+            } else if (a == "--THREADS" && i + 1 < argc) {
+                try { threads = std::stoi(argv[++i]); } catch (...) {}
+            } else if (a == "--TIME-LIMIT" && i + 1 < argc) {
+                try {
+                    double lim = std::stod(argv[++i]);
+                    mrvLimitMs  = lim;
+                    bnbLimitMs  = lim;
+                    pbnbLimitMs = lim;
+                } catch (...) {}
             } else if (a == "--MRV-LIMIT" && i + 1 < argc) {
                 try { mrvLimitMs = std::stod(argv[++i]); } catch (...) {}
             } else if (a == "--BNB-LIMIT" && i + 1 < argc) {
                 try { bnbLimitMs = std::stod(argv[++i]); } catch (...) {}
+            } else if (a == "--PBNB-LIMIT" && i + 1 < argc) {
+                try { pbnbLimitMs = std::stod(argv[++i]); } catch (...) {}
+            } else if (a == "--CSV" && i + 1 < argc) {
+                exportCsv = argv[++i];
             } else {
                 std::cerr << "[WARN] Unknown benchmark argument: " << argv[i] << "\n";
             }
@@ -471,17 +624,21 @@ int main(int argc, char* argv[])
             std::cout << benchSizes[i] << (i+1 < benchSizes.size() ? ", " : "");
         std::cout << "\n";
         std::cout << "[BENCH] MRV limit   : " << mrvLimitMs << " ms\n";
-        std::cout << "[BENCH] B&B limit   : " << bnbLimitMs << " ms\n";
+        std::cout << "[BENCH] Seq B&B lim : " << bnbLimitMs << " ms\n";
+        std::cout << "[BENCH] Par B&B lim : " << pbnbLimitMs << " ms\n";
+        std::cout << "[BENCH] Threads     : " << (threads > 0 ? std::to_string(threads) : "auto") << "\n";
+        std::cout << "[BENCH] Export CSV  : " << exportCsv << "\n";
 
-        runBenchmark(benchSizes, csvPath, mrvLimitMs, bnbLimitMs);
+        runBenchmark(benchSizes, csvPath, mrvLimitMs, bnbLimitMs, pbnbLimitMs, threads, exportCsv);
         return 0;
     }
 
     // ── Single-algorithm mode (original behaviour) ────────────────
-    std::string sizeArg  = toUpper(argv[1]);
-    std::string algo     = "MRV";       // default
-    double      limitMs  = 60000.0;     // 60 s per size
-    int         threads  = 0;           // 0 = OMP default
+    std::string sizeArg       = toUpper(argv[1]);
+    std::string algo          = "MRV";       // default
+    double      limitMs       = 60000.0;     // 60 s per size
+    int         threads       = 0;           // 0 = OMP default
+    std::string csvExportPath = "";
 
     // Parse optional flags
     for (int i = 2; i < argc; ++i) {
@@ -492,6 +649,8 @@ int main(int argc, char* argv[])
             try { limitMs = std::stod(argv[++i]); } catch (...) {}
         } else if (flag == "--threads" && i + 1 < argc) {
             try { threads = std::stoi(argv[++i]); } catch (...) {}
+        } else if (flag == "--csv" && i + 1 < argc) {
+            csvExportPath = argv[++i];
         } else {
             std::cerr << "[WARN] Unknown flag: " << flag << "\n";
         }
@@ -640,5 +799,10 @@ int main(int argc, char* argv[])
         }
     }
     std::cout << "========================================\n";
+
+    if (!csvExportPath.empty()) {
+        writeBenchmarkCSV(csvExportPath, rows);
+    }
+
     return 0;
 }
