@@ -61,6 +61,14 @@ struct RunRow {
     double parMs{-1.0};        // Parallel B&B runtime
     double speedup{-1.0};      // seqMs / parMs
     double efficiency{-1.0};   // speedup / threads
+
+    // Additive fields for JSON export / UI
+    int    unscheduled{0};
+    bool   usedGreedyFallback{false};
+    double timeLimitMs{0.0};
+    ValidationReport validation;
+    std::vector<Session> sessionsData;
+    std::unordered_map<std::string, Course> courseMapData;
 };
 
 
@@ -108,6 +116,11 @@ static RunRow runGreedyOne(const std::string& size,
     row.ms        = res.elapsedMs;
     row.attempts  = res.attemptsCount;
     row.penalty   = feasible ? res.totalPenalty : -1;
+    row.unscheduled   = res.unscheduled;
+    row.timeLimitMs   = 0.0;
+    row.validation    = report;
+    row.sessionsData  = sessions;
+    row.courseMapData = courseMap;
     // backtracks / nodes / pruned not applicable for greedy
     return row;
 }
@@ -154,6 +167,11 @@ static RunRow runMRVOne(const std::string& size,
     row.nodes      = res.nodesExplored;
     row.attempts   = res.attemptsCount;
     row.penalty    = feasible ? res.totalPenalty : -1;
+    row.unscheduled   = res.unscheduled;
+    row.timeLimitMs   = timeLimitMs;
+    row.validation    = report;
+    row.sessionsData  = sessions;
+    row.courseMapData = courseMap;
     return row;
 }
 
@@ -236,6 +254,12 @@ static RunRow runBnBOne(const std::string& size,
     row.penalty    = feasible ? res.bestCost : -1;
     row.threads    = 1;
     row.seqMs      = res.elapsedMs;
+    row.unscheduled        = res.unscheduled;
+    row.usedGreedyFallback = usedGreedyFallback;
+    row.timeLimitMs        = timeLimitMs;
+    row.validation         = report;
+    row.sessionsData       = sessions;
+    row.courseMapData      = courseMap;
     return row;
 }
 
@@ -289,11 +313,183 @@ static RunRow runPBnBOne(const std::string& size,
     row.penalty    = feasible ? res.bestCost : -1;
     row.threads    = (res.threadsUsed > 0) ? res.threadsUsed : (numThreads > 0 ? numThreads : 1);
     row.parMs      = res.elapsedMs;
+    row.unscheduled   = res.unscheduled;
+    row.timeLimitMs   = timeLimitMs;
+    row.validation    = report;
+    row.sessionsData  = sessions;
+    row.courseMapData = courseMap;
     return row;
 }
 
-// Benchmark infrastructure & CSV Export
+// Benchmark infrastructure & CSV / JSON Export
 // ─────────────────────────────────────────────────────────────────
+
+static std::string escapeJSON(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        if (c == '"') out += "\\\"";
+        else if (c == '\\') out += "\\\\";
+        else if (c == '\b') out += "\\b";
+        else if (c == '\f') out += "\\f";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') out += "\\r";
+        else if (c == '\t') out += "\\t";
+        else if ((unsigned char)c < 0x20) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+            out += buf;
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
+static void writeRunJSON(const std::string& filePath, const RunRow& r) {
+    std::ofstream out(filePath);
+    if (!out.is_open()) {
+        std::cerr << "[ERROR] Could not open " << filePath << " for writing JSON.\n";
+        return;
+    }
+
+    auto toLowerStr = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    auto nullOrLong = [](long v) -> std::string {
+        return v >= 0 ? std::to_string(v) : "null";
+    };
+    auto nullOrInt = [](int v) -> std::string {
+        return v >= 0 ? std::to_string(v) : "null";
+    };
+
+    out << "{\n";
+    out << "  \"schema\": 1,\n";
+
+    // meta
+    out << "  \"meta\": {\n";
+    out << "    \"dataset\": \"" << escapeJSON(r.dataset) << "\",\n";
+    out << "    \"algorithm\": \"" << escapeJSON(toLowerStr(r.algo)) << "\",\n";
+    out << "    \"threads\": " << r.threads << ",\n";
+    out << "    \"timeLimitMs\": " << std::fixed << std::setprecision(1) << r.timeLimitMs << "\n";
+    out << "  },\n";
+
+    // metrics
+    out << "  \"metrics\": {\n";
+    out << "    \"courses\": " << r.courses << ",\n";
+    out << "    \"sessions\": " << r.sessions << ",\n";
+    out << "    \"scheduled\": " << r.scheduled << ",\n";
+    out << "    \"unscheduled\": " << r.unscheduled << ",\n";
+    out << "    \"feasible\": " << (r.feasible ? "true" : "false") << ",\n";
+    out << "    \"timedOut\": " << (r.timedOut ? "true" : "false") << ",\n";
+    out << "    \"runtimeMs\": " << std::fixed << std::setprecision(2) << r.ms << ",\n";
+    out << "    \"nodes\": " << nullOrLong(r.nodes) << ",\n";
+    out << "    \"attempts\": " << nullOrLong(r.attempts) << ",\n";
+    out << "    \"backtracks\": " << nullOrLong(r.backtracks) << ",\n";
+    out << "    \"pruned\": " << nullOrLong(r.pruned) << ",\n";
+    out << "    \"penalty\": " << nullOrInt(r.penalty) << ",\n";
+    out << "    \"usedGreedyFallback\": " << (r.usedGreedyFallback ? "true" : "false") << "\n";
+    out << "  },\n";
+
+    // validation
+    out << "  \"validation\": {\n";
+    out << "    \"facultyConflicts\": " << r.validation.facultyConflicts << ",\n";
+    out << "    \"batchConflicts\": " << r.validation.batchConflicts << ",\n";
+    out << "    \"roomConflicts\": " << r.validation.roomConflicts << ",\n";
+    out << "    \"capacityViolations\": " << r.validation.capacityViolations << ",\n";
+    out << "    \"roomTypeViolations\": " << r.validation.roomTypeViolations << ",\n";
+    out << "    \"availabilityViolations\": " << r.validation.availabilityViolations << ",\n";
+    out << "    \"labViolations\": " << r.validation.labViolations << ",\n";
+    out << "    \"missingSessions\": " << r.validation.missingSessions << ",\n";
+    out << "    \"feasible\": " << (r.validation.feasible ? "true" : "false") << "\n";
+    out << "  },\n";
+
+    // sessions
+    out << "  \"sessions\": [\n";
+    for (size_t i = 0; i < r.sessionsData.size(); ++i) {
+        const auto& s = r.sessionsData[i];
+        auto cit = r.courseMapData.find(s.courseId);
+
+        std::string cname = "", ctype = "", fac = "", batch = "";
+        int bstrength = 0, dur = 1;
+        if (cit != r.courseMapData.end()) {
+            cname     = cit->second.courseName;
+            ctype     = cit->second.courseType;
+            fac       = cit->second.facultyId;
+            batch     = cit->second.batchId;
+            bstrength = cit->second.batchStrength;
+            dur       = cit->second.duration;
+        }
+
+        bool assigned = (!s.day.empty() && s.startSlot != -1 && !s.roomId.empty());
+
+        int roomCap = -1;
+        if (assigned && cit != r.courseMapData.end()) {
+            for (const auto& ro : cit->second.roomOptions) {
+                if (ro.roomId == s.roomId) {
+                    roomCap = ro.capacity;
+                    break;
+                }
+            }
+        }
+
+        out << "    {\n";
+        out << "      \"sessionId\": \"" << escapeJSON(s.sessionId) << "\",\n";
+        out << "      \"courseId\": \"" << escapeJSON(s.courseId) << "\",\n";
+        out << "      \"courseName\": \"" << escapeJSON(cname) << "\",\n";
+        out << "      \"courseType\": \"" << escapeJSON(ctype) << "\",\n";
+        out << "      \"facultyId\": \"" << escapeJSON(fac) << "\",\n";
+        out << "      \"batchId\": \"" << escapeJSON(batch) << "\",\n";
+        out << "      \"batchStrength\": " << bstrength << ",\n";
+        out << "      \"duration\": " << dur << ",\n";
+        out << "      \"assigned\": " << (assigned ? "true" : "false") << ",\n";
+
+        if (assigned) {
+            out << "      \"day\": \"" << escapeJSON(s.day) << "\",\n";
+            out << "      \"startSlot\": " << s.startSlot << ",\n";
+            int h1 = 8 + s.startSlot - 1;
+            int h2 = h1 + dur;
+            char sbuf[32];
+            std::snprintf(sbuf, sizeof(sbuf), "%02d:00 - %02d:00", h1, h2);
+            out << "      \"slotLabel\": \"" << sbuf << "\",\n";
+            out << "      \"roomId\": \"" << escapeJSON(s.roomId) << "\",\n";
+            if (roomCap >= 0)
+                out << "      \"roomCapacity\": " << roomCap << "\n";
+            else
+                out << "      \"roomCapacity\": null\n";
+        } else {
+            out << "      \"day\": null,\n";
+            out << "      \"startSlot\": null,\n";
+            out << "      \"slotLabel\": null,\n";
+            out << "      \"roomId\": null,\n";
+            out << "      \"roomCapacity\": null\n";
+        }
+
+        out << "    }" << (i + 1 < r.sessionsData.size() ? "," : "") << "\n";
+    }
+    out << "  ],\n";
+
+    // constants
+    out << "  \"constants\": {\n";
+    out << "    \"days\": [\"MON\", \"TUE\", \"WED\", \"THU\", \"FRI\"],\n";
+    out << "    \"slotsPerDay\": " << SLOTS_PER_DAY << ",\n";
+    out << "    \"lunchAfterSlot\": " << LUNCH_BREAK_AFTER << ",\n";
+    out << "    \"slotLabels\": [\n";
+    for (int sl = 1; sl <= SLOTS_PER_DAY; ++sl) {
+        int h1 = 8 + sl - 1;
+        int h2 = h1 + 1;
+        char lbuf[32];
+        std::snprintf(lbuf, sizeof(lbuf), "%02d:00 - %02d:00", h1, h2);
+        out << "      \"" << lbuf << "\"" << (sl < SLOTS_PER_DAY ? "," : "") << "\n";
+    }
+    out << "    ]\n";
+    out << "  }\n";
+    out << "}\n";
+
+    std::cout << "[INFO] Run exported to JSON: " << filePath << "\n";
+}
 
 // Write benchmark results to CSV (appends if file exists, writes header if new)
 static void writeBenchmarkCSV(const std::string& csvFilePath, const std::vector<RunRow>& rows)
@@ -552,7 +748,7 @@ static void printUsage(const char* prog)
               << "  " << prog
               << " <SMALL|MEDIUM|LARGE|XLARGE|ALL>"
               << " [--algo greedy|mrv|bnb|pbnb]"
-              << " [--time-limit <ms>] [--threads <n>] [--csv <file>]\n"
+              << " [--time-limit <ms>] [--threads <n>] [--csv <file>] [--export-json <file>]\n"
               << "  Default algo  : mrv\n"
               << "  Default limit : 60000 ms per dataset size\n\n"
               << "Usage (unified benchmark):\n"
@@ -638,7 +834,8 @@ int main(int argc, char* argv[])
     std::string algo          = "MRV";       // default
     double      limitMs       = 60000.0;     // 60 s per size
     int         threads       = 0;           // 0 = OMP default
-    std::string csvExportPath = "";
+    std::string csvExportPath  = "";
+    std::string jsonExportPath = "";
 
     // Parse optional flags
     for (int i = 2; i < argc; ++i) {
@@ -651,6 +848,8 @@ int main(int argc, char* argv[])
             try { threads = std::stoi(argv[++i]); } catch (...) {}
         } else if (flag == "--csv" && i + 1 < argc) {
             csvExportPath = argv[++i];
+        } else if (flag == "--export-json" && i + 1 < argc) {
+            jsonExportPath = argv[++i];
         } else {
             std::cerr << "[WARN] Unknown flag: " << flag << "\n";
         }
@@ -802,6 +1001,9 @@ int main(int argc, char* argv[])
 
     if (!csvExportPath.empty()) {
         writeBenchmarkCSV(csvExportPath, rows);
+    }
+    if (!jsonExportPath.empty() && !rows.empty()) {
+        writeRunJSON(jsonExportPath, rows.back());
     }
 
     return 0;
