@@ -449,7 +449,7 @@ static void writeRunJSON(const std::string& filePath, const RunRow& r) {
         if (assigned) {
             out << "      \"day\": \"" << escapeJSON(s.day) << "\",\n";
             out << "      \"startSlot\": " << s.startSlot << ",\n";
-            int h1 = 8 + s.startSlot - 1;
+            int h1 = (s.startSlot <= 4) ? (8 + s.startSlot) : (9 + s.startSlot);
             int h2 = h1 + dur;
             char sbuf[32];
             std::snprintf(sbuf, sizeof(sbuf), "%02d:00 - %02d:00", h1, h2);
@@ -478,7 +478,7 @@ static void writeRunJSON(const std::string& filePath, const RunRow& r) {
     out << "    \"lunchAfterSlot\": " << LUNCH_BREAK_AFTER << ",\n";
     out << "    \"slotLabels\": [\n";
     for (int sl = 1; sl <= SLOTS_PER_DAY; ++sl) {
-        int h1 = 8 + sl - 1;
+        int h1 = (sl <= 4) ? (8 + sl) : (9 + sl);
         int h2 = h1 + 1;
         char lbuf[32];
         std::snprintf(lbuf, sizeof(lbuf), "%02d:00 - %02d:00", h1, h2);

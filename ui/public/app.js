@@ -547,11 +547,21 @@ function renderTimetableGrid() {
   const grid = document.getElementById('timetableGrid');
   if (!state.currentRun) return;
 
+  const defaultSlotLabels = [
+    '09:00 - 10:00',
+    '10:00 - 11:00',
+    '11:00 - 12:00',
+    '12:00 - 13:00',
+    '14:00 - 15:00',
+    '15:00 - 16:00',
+    '16:00 - 17:00'
+  ];
+
   const constants = state.currentRun.constants || {
     days: ['MON', 'TUE', 'WED', 'THU', 'FRI'],
     slotsPerDay: 7,
     lunchAfterSlot: 4,
-    slotLabels: ['08:00 - 09:00', '09:00 - 10:00', '10:00 - 11:00', '11:00 - 12:00', '12:00 - 13:00', '13:00 - 14:00', '14:00 - 15:00']
+    slotLabels: defaultSlotLabels
   };
   const sessions = state.currentRun.sessions || [];
 
@@ -605,14 +615,14 @@ function renderTimetableGrid() {
     if (slot === constants.lunchAfterSlot + 1) {
       const lunchDiv = document.createElement('div');
       lunchDiv.className = 'grid-lunch-divider';
-      lunchDiv.innerHTML = `🍽️ LUNCH BREAK (12:00 - 12:30 PM) — Crossing Prohibited for Lab Sessions`;
+      lunchDiv.innerHTML = `🍽️ LUNCH BREAK (13:00 - 14:00) — Crossing Prohibited for Lab Sessions`;
       grid.appendChild(lunchDiv);
     }
 
     // Time cell on the left
     const timeCell = document.createElement('div');
     timeCell.className = 'grid-cell grid-time-cell';
-    const labelStr = constants.slotLabels[slot - 1] || `Slot ${slot}`;
+    const labelStr = defaultSlotLabels[slot - 1] || `Slot ${slot}`;
     timeCell.innerHTML = `<span class="slot-num">Slot ${slot}</span><span>${labelStr}</span>`;
     grid.appendChild(timeCell);
 

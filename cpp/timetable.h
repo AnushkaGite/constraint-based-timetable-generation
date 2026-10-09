@@ -205,9 +205,9 @@ inline const std::vector<std::string>& orderedDays() {
     return d;
 }
 
-// Slot-to-time label for display (slots 1-7 → 08-09, 09-10, ... 14-15)
+// Slot-to-time label for display (slots 1-7 → 09-10, 10-11, ... 16-17)
 inline std::string slotLabel(int slot) {
-    int h = 8 + slot - 1;   // slot 1 = 08:xx
+    int h = (slot <= 4) ? (8 + slot) : (9 + slot);
     int h2 = h + 1;
     auto pad = [](int x){ return (x < 10 ? "0" : "") + std::to_string(x); };
     return pad(h) + "-" + pad(h2);
