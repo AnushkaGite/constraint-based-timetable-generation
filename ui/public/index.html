@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Timetable Solver Dashboard — DAA Constraint-Based Scheduling</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Offline vendor Chart.js -->
+  <script src="vendor/chart.umd.min.js"></script>
+</head>
+<body data-theme="dark">
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand">
+        <div class="brand-icon">📅</div>
+        <div>
+          <h1 class="brand-title">Timetable Solver Dashboard</h1>
+          <p class="brand-subtitle">Constraint-Based College Timetable Generation • C++17 + OpenMP</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <!-- Status chips -->
+      <div class="status-chip" id="chipServer" title="Checking server status...">
+        <span class="status-dot dot-gray"></span>
+        <span class="status-label">Server</span>
+      </div>
+      <div class="status-chip" id="chipExe" title="Checking C++ executable...">
+        <span class="status-dot dot-gray"></span>
+        <span class="status-label">Solver .exe</span>
+      </div>
+      <div class="status-chip" id="chipCsv" title="Checking dataset CSV...">
+        <span class="status-dot dot-gray"></span>
+        <span class="status-label">Dataset CSV</span>
+      </div>
+
+      <!-- Theme toggle -->
+      <button class="theme-toggle-btn" id="btnThemeToggle" aria-label="Toggle dark/light mode" title="Toggle theme">
+        <span id="themeIcon">☀️</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="tab-nav" role="tablist">
+    <button class="tab-btn active" id="tabBtnTimetable" role="tab" aria-selected="true" data-tab="tabTimetable">
+      <span class="tab-icon">🗓️</span> Run &amp; Timetable
+    </button>
+    <button class="tab-btn" id="tabBtnBenchmarks" role="tab" aria-selected="false" data-tab="tabBenchmarks">
+      <span class="tab-icon">📊</span> Benchmarks &amp; Analysis
+    </button>
+    <button class="tab-btn" id="tabBtnScaling" role="tab" aria-selected="false" data-tab="tabScaling">
+      <span class="tab-icon">⚡</span> Parallel Scaling (Amdahl)
+    </button>
+  </nav>
+
+  <!-- Main Container -->
+  <main class="main-content">
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- TAB 1: RUN & TIMETABLE -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <section class="tab-panel active" id="tabTimetable" role="tabpanel">
+
+      <!-- Control Bar -->
+      <div class="card control-card">
+        <div class="control-row">
+          <div class="control-group">
+            <label for="selSize">Dataset Size</label>
+            <select id="selSize" class="form-select">
+              <option value="SMALL" selected>SMALL (10 courses, 33 sess)</option>
+              <option value="MEDIUM">MEDIUM (25 courses, 84 sess)</option>
+              <option value="LARGE">LARGE (50 courses, 161 sess)</option>
+              <option value="XLARGE">XLARGE (100 courses, 322 sess)</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label for="selAlgo">Algorithm</label>
+            <select id="selAlgo" class="form-select">
+              <option value="greedy" selected>Greedy Heuristic</option>
+              <option value="mrv">MRV + Backtracking</option>
+              <option value="bnb">Sequential Branch &amp; Bound</option>
+              <option value="pbnb">Parallel Branch &amp; Bound (OpenMP)</option>
+            </select>
+          </div>
+
+          <div class="control-group" id="grpThreads" style="display: none;">
+            <label for="numThreads">Threads</label>
+            <input type="number" id="numThreads" class="form-input" min="1" max="64" value="4">
+          </div>
+
+          <div class="control-group" id="grpTimeLimit" style="display: none;">
+            <label for="selTimeLimit">Time Limit</label>
+            <div class="limit-input-group">
+              <select id="selTimeLimit" class="form-select">
+                <option value="5000">5 seconds (5000 ms)</option>
+                <option value="15000">15 seconds (15000 ms)</option>
+                <option value="30000" selected>30 seconds (30000 ms)</option>
+                <option value="60000">60 seconds (60000 ms)</option>
+                <option value="custom">Custom ms...</option>
+              </select>
+              <input type="number" id="customTimeLimit" class="form-input" style="display:none; width: 90px;" min="100" max="300000" value="30000">
+            </div>
+          </div>
+
+          <div class="control-actions">
+            <button class="btn btn-primary" id="btnRunSolver">
+              <span class="btn-icon">▶</span> Run Solver
+            </button>
+            <button class="btn btn-danger" id="btnCancelJob" style="display:none;">
+              <span class="btn-icon">⏹</span> Cancel
+            </button>
+          </div>
+
+          <div class="saved-runs-group">
+            <label for="selSavedRuns">Saved Runs</label>
+            <select id="selSavedRuns" class="form-select">
+              <option value="">(Loading saved runs...)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Live Progress Banner -->
+        <div class="job-progress-bar" id="jobProgressBar" style="display:none;">
+          <div class="spinner"></div>
+          <div class="progress-details">
+            <span class="progress-text" id="jobProgressText">Solver is executing...</span>
+            <span class="progress-timer" id="jobTimer">0.0s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Solver Result Section (Hidden until run loaded) -->
+      <div id="resultsSection" style="display:none;">
+
+        <!-- Result Overview Header -->
+        <div class="card result-header-card">
+          <div class="result-header-top">
+            <div class="badge-and-title">
+              <div id="feasibilityBadge" class="badge badge-neutral">UNKNOWN</div>
+              <div class="run-title-meta">
+                <h2 id="runMetaHeading">SMALL — Greedy</h2>
+                <span id="runMetaSubtitle" class="text-muted">threads: 1 | limit: 0ms</span>
+              </div>
+            </div>
+
+            <!-- Fallback notice -->
+            <div id="fallbackNotice" class="alert alert-info" style="display:none;">
+              ℹ️ <strong>Greedy Fallback Used:</strong> B&amp;B found no improvement within time budget; displaying the valid Greedy solution.
+            </div>
+          </div>
+
+          <!-- Metric Cards Grid -->
+          <div class="metrics-grid">
+            <div class="metric-card" id="cardRuntime">
+              <span class="metric-label">Runtime</span>
+              <span class="metric-value" id="valRuntime">—</span>
+            </div>
+            <div class="metric-card" id="cardScheduled">
+              <span class="metric-label">Scheduled</span>
+              <span class="metric-value" id="valScheduled">—</span>
+            </div>
+            <div class="metric-card" id="cardPenalty">
+              <span class="metric-label">Soft Penalty</span>
+              <span class="metric-value" id="valPenalty">—</span>
+            </div>
+            <div class="metric-card" id="cardNodes">
+              <span class="metric-label">Nodes Explored</span>
+              <span class="metric-value" id="valNodes">—</span>
+            </div>
+            <div class="metric-card" id="cardBacktracks">
+              <span class="metric-label">Backtracks</span>
+              <span class="metric-value" id="valBacktracks">—</span>
+            </div>
+            <div class="metric-card" id="cardPruned">
+              <span class="metric-label">Pruned Branches</span>
+              <span class="metric-value" id="valPruned">—</span>
+            </div>
+          </div>
+
+          <!-- Constraint Breakdown Collapsible -->
+          <details class="constraint-details" id="detailsConstraints" open>
+            <summary class="details-summary">
+              <span>🔍 Independent Hard-Constraint Breakdown (8 Rules)</span>
+              <span class="summary-status-tag" id="constraintSummaryTag">Validating...</span>
+            </summary>
+            <div class="constraint-table-wrapper">
+              <table class="constraint-table">
+                <thead>
+                  <tr>
+                    <th>Constraint Check</th>
+                    <th>Status</th>
+                    <th>Violations Count</th>
+                    <th>Rule Definition</th>
+                  </tr>
+                </thead>
+                <tbody id="constraintTableBody">
+                  <!-- Filled by app.js -->
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+
+        <!-- Unscheduled Sessions Warning (if any) -->
+        <div class="card alert alert-warning" id="unscheduledPanel" style="display:none;">
+          <div class="alert-title">⚠️ Incomplete Timetable — Unscheduled Sessions</div>
+          <p id="unscheduledIntro">Some sessions could not find conflict-free slots:</p>
+          <div class="unscheduled-tags-list" id="unscheduledList"></div>
+        </div>
+
+        <!-- Timetable View Controls -->
+        <div class="card timetable-wrapper-card">
+          <div class="timetable-toolbar">
+            <div class="view-mode-selector">
+              <label>Filter By:</label>
+              <div class="btn-group" role="group">
+                <button type="button" class="btn btn-sm btn-filter active" data-mode="all">All</button>
+                <button type="button" class="btn btn-sm btn-filter" data-mode="batch">Batch</button>
+                <button type="button" class="btn btn-sm btn-filter" data-mode="faculty">Faculty</button>
+                <button type="button" class="btn btn-sm btn-filter" data-mode="room">Room</button>
+              </div>
+            </div>
+
+            <div class="filter-dropdown-group" id="filterDropdownGroup" style="display:none;">
+              <label id="lblFilterTarget" for="selFilterTarget">Select Batch:</label>
+              <select id="selFilterTarget" class="form-select form-select-sm"></select>
+            </div>
+
+            <div class="legend-group">
+              <span class="legend-chip"><span class="badge-type theory-tag">THEORY</span> 1 hour</span>
+              <span class="legend-chip"><span class="badge-type lab-tag">LAB</span> 2 hours</span>
+              <span class="legend-chip text-muted" id="totalVisibleSessions">Showing 0 sessions</span>
+            </div>
+          </div>
+
+          <!-- The Matrix Grid -->
+          <div class="grid-scroll-container">
+            <div class="timetable-grid" id="timetableGrid">
+              <!-- Grid constructed dynamically in app.js -->
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Empty / Placeholder State -->
+      <div class="card empty-state-card" id="emptyStateTimetable">
+        <div class="empty-icon">📊</div>
+        <h3>No Timetable Loaded</h3>
+        <p>Select your parameters above and click <strong>Run Solver</strong>, or choose a run from <strong>Saved Runs</strong>.</p>
+      </div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- TAB 2: BENCHMARKS & ANALYSIS -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tabBenchmarks" role="tabpanel" style="display:none;">
+      
+      <!-- Top Bar: Filters & Export -->
+      <div class="card filter-bar-card">
+        <div class="filter-bar-left">
+          <span class="filter-title">Filter Dataset Size:</span>
+          <div class="btn-group" id="benchSizeFilters">
+            <button class="btn btn-sm btn-filter active" data-size="ALL">All Sizes</button>
+            <button class="btn btn-sm btn-filter" data-size="SMALL">SMALL (33)</button>
+            <button class="btn btn-sm btn-filter" data-size="MEDIUM">MEDIUM (84)</button>
+            <button class="btn btn-sm btn-filter" data-size="LARGE">LARGE (161)</button>
+            <button class="btn btn-sm btn-filter btn-disabled" data-size="XLARGE" title="Not run yet">XLARGE (322) <span class="tag-sub">unrun</span></button>
+          </div>
+        </div>
+
+        <div class="filter-bar-right">
+          <button class="btn btn-secondary btn-sm" id="btnDownloadCsv">
+            ⬇️ Download benchmark_results.csv
+          </button>
+          <button class="btn btn-secondary btn-sm" id="btnRefreshBench">
+            🔄 Refresh Data
+          </button>
+        </div>
+      </div>
+
+      <!-- Explanatory Notice for B&B Speedup -->
+      <div class="card alert alert-info">
+        💡 <strong>DAA Note on Speedup:</strong> Both Sequential B&amp;B and Parallel B&amp;B run with equal fixed time limits (30s) on large problem trees. Wall-clock runtime ratio is $1.00\times$ by definition of timeout. Chart 5 displays <strong>Throughput Speedup</strong> $(\text{nodes/sec}_{\text{par}} / \text{nodes/sec}_{\text{seq}})$, which captures genuine multi-core work scaling.
+      </div>
+
+      <!-- Charts Grid -->
+      <div class="charts-grid">
+        <!-- Chart 1: Runtime -->
+        <div class="card chart-card">
+          <div class="chart-header">
+            <h3>1. Execution Runtime by Algorithm</h3>
+            <span class="chart-subtitle">Log scale (ms). Hatched bars indicate search timed out.</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="chartRuntime"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 2: Nodes Explored -->
+        <div class="card chart-card">
+          <div class="chart-header">
+            <h3>2. Search Nodes Explored</h3>
+            <span class="chart-subtitle">Log scale. Total combinatorial search states inspected.</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="chartNodes"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 3: Soft Penalty -->
+        <div class="card chart-card">
+          <div class="chart-header">
+            <h3>3. Soft-Constraint Penalty (Cost)</h3>
+            <span class="chart-subtitle">Lower is better. Null on unfeasible/timed-out assignments.</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="chartPenalty"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 4: Completion Ratio -->
+        <div class="card chart-card">
+          <div class="chart-header">
+            <h3>4. Session Completion Rate</h3>
+            <span class="chart-subtitle">Scheduled vs. Total sessions required (100% = complete).</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="chartCompletion"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 5: Throughput Speedup -->
+        <div class="card chart-card chart-card-wide">
+          <div class="chart-header">
+            <h3>5. Sequential vs. Parallel B&amp;B Search Throughput (nodes/sec)</h3>
+            <span class="chart-subtitle">Measures parallel exploration rate and throughput speedup across 4 OpenMP threads.</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="chartThroughput"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Deduplicated Benchmark Table -->
+      <div class="card table-card">
+        <div class="table-card-header">
+          <h3>Deduplicated Benchmark History (Latest per config)</h3>
+          <span class="text-muted" id="benchRowCount">0 rows loaded</span>
+        </div>
+        <div class="table-scroll-container">
+          <table class="data-table" id="benchDataTable">
+            <thead>
+              <tr>
+                <th data-sort="dataset">Dataset ⬍</th>
+                <th data-sort="algorithm">Algorithm ⬍</th>
+                <th data-sort="threads">Threads ⬍</th>
+                <th data-sort="scheduled">Scheduled ⬍</th>
+                <th data-sort="feasible">Feasible ⬍</th>
+                <th data-sort="timedOut">TimedOut ⬍</th>
+                <th data-sort="runtimeMs">Runtime (ms) ⬍</th>
+                <th data-sort="nodes">Nodes ⬍</th>
+                <th data-sort="nodesPerSec">Throughput (nodes/s) ⬍</th>
+                <th data-sort="backtracks">Backtracks ⬍</th>
+                <th data-sort="pruned">Pruned ⬍</th>
+                <th data-sort="penalty">Penalty ⬍</th>
+              </tr>
+            </thead>
+            <tbody id="benchTableBody">
+              <!-- Filled by app.js -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <!-- TAB 3: PARALLEL SCALING (AMDAHL'S LAW) -->
+    <!-- ══════════════════════════════════════════════════════════════ -->
+    <section class="tab-panel" id="tabScaling" role="tabpanel" style="display:none;">
+
+      <!-- Scaling Controls Card -->
+      <div class="card control-card">
+        <div class="control-row">
+          <div class="control-group">
+            <label for="sweepSize">Dataset Size</label>
+            <select id="sweepSize" class="form-select">
+              <option value="SMALL" selected>SMALL (33 sessions)</option>
+              <option value="MEDIUM">MEDIUM (84 sessions)</option>
+              <option value="LARGE">LARGE (161 sessions)</option>
+            </select>
+          </div>
+
+          <div class="control-group">
+            <label>Thread Counts to Test</label>
+            <div class="checkbox-row" id="sweepThreadChecks">
+              <label class="check-label"><input type="checkbox" value="1" checked disabled> 1 (baseline)</label>
+              <label class="check-label"><input type="checkbox" value="2" checked> 2</label>
+              <label class="check-label"><input type="checkbox" value="4" checked> 4</label>
+              <label class="check-label" id="lblThread8"><input type="checkbox" value="8" checked> 8</label>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label for="sweepTimeLimit">Time Limit per Step</label>
+            <select id="sweepTimeLimit" class="form-select">
+              <option value="3000">3 seconds (fast test)</option>
+              <option value="5000" selected>5 seconds</option>
+              <option value="10000">10 seconds</option>
+              <option value="15000">15 seconds</option>
+            </select>
+          </div>
+
+          <div class="control-actions">
+            <button class="btn btn-primary" id="btnStartSweep">
+              <span class="btn-icon">⚡</span> Run Scaling Sweep
+            </button>
+            <button class="btn btn-danger" id="btnCancelSweep" style="display:none;">
+              <span class="btn-icon">⏹</span> Cancel Sweep
+            </button>
+          </div>
+        </div>
+
+        <!-- Sweep Live Banner -->
+        <div class="job-progress-bar" id="sweepProgressBar" style="display:none;">
+          <div class="spinner"></div>
+          <div class="progress-details">
+            <span class="progress-text" id="sweepProgressText">Executing sweep...</span>
+            <div class="progress-sub" id="sweepStepCounter">Step 0 / 0</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Theoretical Foundation Card -->
+      <div class="card info-callout-card">
+        <h3>Amdahl's Law &amp; Tree Search Scaling</h3>
+        <p>
+          In parallel Branch &amp; Bound with root splitting, threads independently evaluate subtrees. Let $S(p)$ be the throughput speedup over $p$ threads:
+          $$S(p) = \frac{\text{Throughput}(p)}{\text{Throughput}(1)}, \quad E(p) = \frac{S(p)}{p}$$
+          Amdahl's Law models maximum achievable speedup given a parallelizable fraction $f$:
+          $$S(p) = \frac{1}{(1 - f) + \frac{f}{p}} \implies f = \frac{1 - \frac{1}{S(p)}}{1 - \frac{1}{p}}$$
+        </p>
+      </div>
+
+      <!-- Scaling Results View -->
+      <div id="scalingResultsView" style="display:none;">
+        <div class="charts-grid-two">
+          <!-- Scaling Curve Chart -->
+          <div class="card chart-card">
+            <div class="chart-header">
+              <h3>Scaling Curve: Throughput vs. Threads</h3>
+              <span class="chart-subtitle">Empirical speedup vs. Ideal linear speedup ($y = p$) vs. Amdahl fit.</span>
+            </div>
+            <div class="chart-container">
+              <canvas id="chartAmdahl"></canvas>
+            </div>
+          </div>
+
+          <!-- Speedup & Efficiency Table Card -->
+          <div class="card table-card">
+            <div class="table-card-header">
+              <h3>Speedup $S(p)$ &amp; Parallel Efficiency $E(p)$</h3>
+              <div id="amdahlFitBadge" class="badge badge-info">Amdahl Fit: f = —</div>
+            </div>
+            <table class="data-table" id="tblScalingMetrics">
+              <thead>
+                <tr>
+                  <th>Threads ($p$)</th>
+                  <th>Nodes Explored</th>
+                  <th>Throughput (n/s)</th>
+                  <th>Speedup $S(p)$</th>
+                  <th>Efficiency $E(p)$</th>
+                </tr>
+              </thead>
+              <tbody id="tblScalingBody"></tbody>
+            </table>
+            <div class="scaling-summary-notes" id="scalingSummaryNotes"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Placeholder if no sweep has run -->
+      <div class="card empty-state-card" id="emptyStateSweep">
+        <div class="empty-icon">📈</div>
+        <h3>No Scaling Sweep Executed Yet</h3>
+        <p>Choose your thread counts and click <strong>Run Scaling Sweep</strong> to measure OpenMP scaling and fit Amdahl's curve.</p>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Side Inspector Drawer (Session Details) -->
+  <aside class="side-drawer" id="sessionDrawer" aria-hidden="true">
+    <div class="drawer-header">
+      <h3 id="drawerCourseName">Course Details</h3>
+      <button class="drawer-close-btn" id="btnCloseDrawer" aria-label="Close inspector">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div class="drawer-badge-row">
+        <span class="badge" id="drawerCourseType">THEORY</span>
+        <span class="badge badge-info" id="drawerDuration">1 slot</span>
+      </div>
+
+      <dl class="drawer-detail-list">
+        <dt>Session ID</dt>
+        <dd id="drawerSessionId">—</dd>
+
+        <dt>Course ID</dt>
+        <dd id="drawerCourseId">—</dd>
+
+        <dt>Faculty</dt>
+        <dd id="drawerFaculty">—</dd>
+
+        <dt>Batch</dt>
+        <dd id="drawerBatch">—</dd>
+
+        <dt>Batch Strength</dt>
+        <dd id="drawerBatchStrength">—</dd>
+
+        <dt>Assigned Room</dt>
+        <dd id="drawerRoom">—</dd>
+
+        <dt>Room Capacity</dt>
+        <dd id="drawerRoomCap">—</dd>
+
+        <dt>Capacity Check</dt>
+        <dd id="drawerCapCheck">—</dd>
+
+        <dt>Scheduled Slot</dt>
+        <dd id="drawerSlotTime">—</dd>
+      </dl>
+    </div>
+  </aside>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
