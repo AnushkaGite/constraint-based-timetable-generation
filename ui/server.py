@@ -169,24 +169,26 @@ def run_solver_process(job_id: str, size: str, algo: str, threads: int, time_lim
 
         timeout_sec = (time_limit_ms / 1000.0) + 20.0
 
-        # Wait with watchdog
-        while proc.poll() is None:
-            time.sleep(0.1)
-            elapsed = time.time() - t0
-            curr_job = job_manager.get_job(job_id)
-            if curr_job and curr_job.get("status") == "cancelled":
-                return
-            if elapsed > timeout_sec:
-                if platform.system() == "Windows":
-                    subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                                   capture_output=True, check=False)
-                else:
-                    proc.kill()
-                job_manager.update_job(job_id, status="error",
-                                       error=f"Process exceeded hard safety watchdog limit of {timeout_sec:.1f}s")
-                return
-
-        stdout_data, stderr_data = proc.communicate()
+        stdout_data, stderr_data = "", ""
+        # Wait with watchdog, reading pipes to avoid deadlocks
+        while True:
+            try:
+                stdout_data, stderr_data = proc.communicate(timeout=0.2)
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = time.time() - t0
+                curr_job = job_manager.get_job(job_id)
+                if curr_job and curr_job.get("status") == "cancelled":
+                    return
+                if elapsed > timeout_sec:
+                    if platform.system() == "Windows":
+                        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                                       capture_output=True, check=False)
+                    else:
+                        proc.kill()
+                    job_manager.update_job(job_id, status="error",
+                                           error=f"Process exceeded hard safety watchdog limit of {timeout_sec:.1f}s")
+                    return
         elapsed_ms = (time.time() - t0) * 1000.0
 
         if proc.returncode != 0:
