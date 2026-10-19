@@ -74,15 +74,14 @@
               <option value="SMALL" selected>SMALL (10 courses, 33 sess)</option>
               <option value="MEDIUM">MEDIUM (25 courses, 84 sess)</option>
               <option value="LARGE">LARGE (50 courses, 161 sess)</option>
-              <option value="XLARGE">XLARGE (100 courses, 322 sess)</option>
             </select>
           </div>
 
           <div class="control-group">
             <label for="selAlgo">Algorithm</label>
             <select id="selAlgo" class="form-select">
-              <option value="greedy" selected>Greedy Heuristic</option>
-              <option value="mrv">MRV + Backtracking</option>
+              <option value="greedy">Greedy Heuristic</option>
+              <option value="mrv" selected>MRV + Backtracking</option>
               <option value="bnb">Sequential Branch &amp; Bound</option>
               <option value="pbnb">Parallel Branch &amp; Bound (OpenMP)</option>
             </select>
@@ -150,7 +149,7 @@
 
             <!-- Fallback notice -->
             <div id="fallbackNotice" class="alert alert-info" style="display:none;">
-              ℹ️ <strong>Greedy Fallback Used:</strong> B&amp;B found no improvement within time budget; displaying the valid Greedy solution.
+              ℹ️ <strong>Greedy Fallback Used:</strong> Search did not find a complete timetable; displaying the Greedy schedule, which may be partial.
             </div>
           </div>
 
@@ -271,7 +270,6 @@
             <button class="btn btn-sm btn-filter" data-size="SMALL">SMALL (33)</button>
             <button class="btn btn-sm btn-filter" data-size="MEDIUM">MEDIUM (84)</button>
             <button class="btn btn-sm btn-filter" data-size="LARGE">LARGE (161)</button>
-            <button class="btn btn-sm btn-filter btn-disabled" data-size="XLARGE" title="Not run yet">XLARGE (322) <span class="tag-sub">unrun</span></button>
           </div>
         </div>
 

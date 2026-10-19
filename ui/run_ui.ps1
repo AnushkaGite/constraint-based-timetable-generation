@@ -20,19 +20,36 @@ try {
 
 # Check C++ Solver Executable
 $exePath = Join-Path $ProjectRoot "cpp\timetable_solver.exe"
-if (-not (Test-Path $exePath)) {
-    Write-Host "[WARN] timetable_solver.exe not found at $exePath" -ForegroundColor Yellow
+$cppDir = Join-Path $ProjectRoot "cpp"
+$solverInputs = @(
+    Get-ChildItem -Path $cppDir -File |
+        Where-Object { $_.Extension -in @(".cpp", ".h") }
+)
+$needsBuild = -not (Test-Path $exePath)
+
+if (-not $needsBuild) {
+    $exeWriteTime = (Get-Item $exePath).LastWriteTimeUtc
+    $needsBuild = @($solverInputs | Where-Object {
+        $_.LastWriteTimeUtc -gt $exeWriteTime
+    }).Count -gt 0
+}
+
+if ($needsBuild) {
+    Write-Host "[WARN] Solver is missing or older than its C++ sources." -ForegroundColor Yellow
     Write-Host "[INFO] Attempting build with g++..." -ForegroundColor Yellow
-    Push-Location (Join-Path $ProjectRoot "cpp")
+    Push-Location $cppDir
     try {
         g++ -std=c++17 -O2 -fopenmp main.cpp timetable.cpp constraint_checker.cpp greedy.cpp mrv.cpp bnb.cpp bnb_parallel.cpp -o timetable_solver.exe
+        if ($LASTEXITCODE -ne 0) {
+            throw "g++ exited with code $LASTEXITCODE"
+        }
         Write-Host "[OK] Built timetable_solver.exe successfully" -ForegroundColor Green
     } catch {
-        Write-Host "[ERROR] Could not build executable. You can still view benchmarks and saved runs." -ForegroundColor Red
+        Write-Host "[ERROR] Could not build executable: $_" -ForegroundColor Red
     }
     Pop-Location
 } else {
-    Write-Host "[OK] Found solver executable: $exePath" -ForegroundColor Green
+    Write-Host "[OK] Solver executable is up to date: $exePath" -ForegroundColor Green
 }
 
 # Launch browser after a brief delay

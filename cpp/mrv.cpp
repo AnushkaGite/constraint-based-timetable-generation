@@ -5,6 +5,7 @@
 #include <chrono>
 #include <climits>
 #include <array>
+#include <random>
 
 // ═══════════════════════════════════════════════════════════════════
 // Valid slot lists
@@ -170,6 +171,11 @@ struct MRVContext {
     MRVResult&                                     result;
     std::chrono::steady_clock::time_point          t0;
     double                                         limitMs;
+    std::chrono::steady_clock::time_point          restartT0;
+    double                                         restartLimitMs{0.0};
+    bool                                           restartExpired{false};
+    bool                                           diversify{false};
+    std::mt19937                                  rng{0x5EED};
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -180,9 +186,16 @@ static bool btSolve(MRVContext& ctx, int unassignedCount)
     ++ctx.result.nodesExplored;
 
     if (ctx.limitMs > 0.0) {
+        const auto now = std::chrono::steady_clock::now();
         double el = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - ctx.t0).count();
+            now - ctx.t0).count();
         if (el >= ctx.limitMs) { ctx.result.timedOut = true; return false; }
+        if (ctx.restartLimitMs > 0.0 &&
+            std::chrono::duration<double, std::milli>(
+                now - ctx.restartT0).count() >= ctx.restartLimitMs) {
+            ctx.restartExpired = true;
+            return false;
+        }
     }
 
     if (unassignedCount == 0) return true;
@@ -192,6 +205,7 @@ static bool btSolve(MRVContext& ctx, int unassignedCount)
     int  bestCount = INT_MAX;
     int  bestDeg   = -1;
     int  bestDur   = -1;
+    int  bestTieCount = 0;
     std::vector<Candidate> bestCands;
 
     for (int i = 0; i < (int)ctx.sessions.size(); ++i) {
@@ -214,16 +228,20 @@ static bool btSolve(MRVContext& ctx, int unassignedCount)
         int dur = course.duration;
 
         bool better = false;
+        bool equalPriority = false;
         if (cnt < bestCount) {
             better = true;
         } else if (cnt == bestCount) {
             if (deg > bestDeg) better = true;
             else if (deg == bestDeg) {
                 if (dur > bestDur) better = true;
-                else if (dur == bestDur &&
-                    ctx.sessions[i].sessionId <
-                    (bestIdx >= 0 ? ctx.sessions[bestIdx].sessionId : ""))
-                    better = true;
+                else if (dur == bestDur) {
+                    equalPriority = true;
+                    if (!ctx.diversify &&
+                        ctx.sessions[i].sessionId <
+                        (bestIdx >= 0 ? ctx.sessions[bestIdx].sessionId : ""))
+                        better = true;
+                }
             }
         }
 
@@ -232,7 +250,15 @@ static bool btSolve(MRVContext& ctx, int unassignedCount)
             bestIdx   = i;
             bestDeg   = deg;
             bestDur   = dur;
+            bestTieCount = 1;
             bestCands = std::move(cands);
+        } else if (equalPriority && ctx.diversify) {
+            ++bestTieCount;
+            std::uniform_int_distribution<int> chooseTie(1, bestTieCount);
+            if (chooseTie(ctx.rng) == 1) {
+                bestIdx   = i;
+                bestCands = std::move(cands);
+            }
         }
     }
 
@@ -242,18 +268,41 @@ static bool btSolve(MRVContext& ctx, int unassignedCount)
     {
         const Course& course = ctx.courseMap.at(ctx.sessions[bestIdx].courseId);
         auto flatCommitted = ctx.store.flat();   // for softPenalty
-        std::sort(bestCands.begin(), bestCands.end(),
-            [&](const Candidate& a, const Candidate& b) {
-                int pa = softPenalty(course, a.day, a.slot, a.roomId, flatCommitted);
-                int pb = softPenalty(course, b.day, b.slot, b.roomId, flatCommitted);
-                if (pa != pb) return pa < pb;
-                const auto& days = orderedDays();
-                int da = (int)(std::find(days.begin(),days.end(),a.day)-days.begin());
-                int db = (int)(std::find(days.begin(),days.end(),b.day)-days.begin());
-                if (da != db) return da < db;
-                if (a.slot != b.slot) return a.slot < b.slot;
-                return a.roomId < b.roomId;
-            });
+        if (ctx.diversify) {
+            struct ScoredCandidate {
+                int penalty;
+                Candidate candidate;
+            };
+            std::vector<ScoredCandidate> scored;
+            scored.reserve(bestCands.size());
+            for (const auto& candidate : bestCands) {
+                scored.push_back({
+                    softPenalty(course, candidate.day, candidate.slot,
+                                candidate.roomId, flatCommitted),
+                    candidate
+                });
+            }
+            std::shuffle(scored.begin(), scored.end(), ctx.rng);
+            std::stable_sort(scored.begin(), scored.end(),
+                [](const ScoredCandidate& a, const ScoredCandidate& b) {
+                    return a.penalty < b.penalty;
+                });
+            for (size_t i = 0; i < scored.size(); ++i)
+                bestCands[i] = std::move(scored[i].candidate);
+        } else {
+            std::sort(bestCands.begin(), bestCands.end(),
+                [&](const Candidate& a, const Candidate& b) {
+                    int pa = softPenalty(course, a.day, a.slot, a.roomId, flatCommitted);
+                    int pb = softPenalty(course, b.day, b.slot, b.roomId, flatCommitted);
+                    if (pa != pb) return pa < pb;
+                    const auto& days = orderedDays();
+                    int da = (int)(std::find(days.begin(),days.end(),a.day)-days.begin());
+                    int db = (int)(std::find(days.begin(),days.end(),b.day)-days.begin());
+                    if (da != db) return da < db;
+                    if (a.slot != b.slot) return a.slot < b.slot;
+                    return a.roomId < b.roomId;
+                });
+        }
     }
 
     // ── Try each candidate ───────────────────────────────────────
@@ -272,6 +321,7 @@ static bool btSolve(MRVContext& ctx, int unassignedCount)
         sess.day       = "";
         sess.startSlot = -1;
         sess.roomId    = "";
+        if (ctx.result.timedOut || ctx.restartExpired) return false;
         ++ctx.result.backtracks;
     }
 
@@ -299,10 +349,37 @@ MRVResult runMRV(
     sessions = generateSessions(courses);
     result.totalSessions = (int)sessions.size();
 
+    const bool diversify = sessions.size() >= 100 && timeLimitMs > 0.0;
     MRVContext ctx{sessions, courseMap, graph, courseIndex,
-                   {}, result, t0, timeLimitMs};
+                   {}, result, t0, timeLimitMs, t0, 0.0, false, diversify};
 
-    bool solved = btSolve(ctx, result.totalSessions);
+    bool solved = false;
+    int restart = 0;
+    double restartBudgetMs = std::min(1500.0, timeLimitMs);
+    // Larger searches rotate their tie-breaking order without exceeding the total budget.
+    do {
+        if (restart > 0) {
+            sessions = generateSessions(courses);
+            ctx.store = CommittedStore{};
+            ctx.restartExpired = false;
+            ctx.rng.seed(0x5EEDu + static_cast<unsigned int>(restart) * 0x9E3779B9u);
+        }
+        ctx.restartT0 = std::chrono::steady_clock::now();
+        ctx.restartLimitMs = diversify ? restartBudgetMs : 0.0;
+        solved = btSolve(ctx, result.totalSessions);
+        if (solved || result.timedOut || !ctx.restartExpired || !diversify)
+            break;
+
+        ++restart;
+        double elapsedMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        double remainingMs = timeLimitMs - elapsedMs;
+        if (remainingMs <= 0.0) {
+            result.timedOut = true;
+            break;
+        }
+        restartBudgetMs = std::min(restartBudgetMs * 2.0, remainingMs);
+    } while (true);
 
     result.elapsedMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - t0).count();

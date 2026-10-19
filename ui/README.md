@@ -16,7 +16,7 @@ Run the PowerShell launcher script:
 ```powershell
 .\ui\run_ui.ps1
 ```
-This checks the environment, builds the solver if missing, starts the local server, and opens your browser at:
+This checks the environment, builds the solver if it is missing or older than its C++ sources, starts the local server, and opens your browser at:
 **`http://127.0.0.1:8000`**
 
 ### Manual Server Launch
@@ -30,10 +30,12 @@ python ui\server.py --port 8000
 
 ### Tab 1: Run & Timetable
 - **Live Solver Execution**: Run Greedy, MRV, Sequential B&B, or OpenMP Parallel B&B with custom thread counts and time limits.
+- **Large MRV Search**: LARGE MRV runs use reproducible, bounded search restarts to explore alternative tie-break orders within the selected time limit.
 - **Computed Feasibility Badge**: 
   - 🟢 **FEASIBLE**: Complete timetable with 0 hard violations.
   - 🟡 **PARTIAL**: Constructive heuristic placed some sessions before resource exhaustion.
   - 🔴 **NO TIMETABLE**: Search exhausted time budget before finding a feasible leaf node.
+- If a bounded search does not find a complete timetable, the dashboard displays the Greedy schedule as a fallback. It may be partial; the search timeout and unscheduled-session count remain visible.
 - **Detailed Constraint Breakdown**: Expandable drawer with pass/fail indicators across all 8 hard constraints.
 - **Interactive Schedule Matrix**: 5-day (MON–FRI) $\times$ 7-slot matrix with clear lunch divider (slots 4–5), multi-hour lab row spanning, and categorical color-coding. Filterable by Batch, Faculty, Room, or All.
 - **Side Inspector Drawer**: Click any session chip to inspect batch strength vs. room capacity, faculty ID, and duration.

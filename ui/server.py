@@ -357,7 +357,7 @@ def parse_benchmark_csv():
         dedup_map[key] = typed_row
 
     # Preserve consistent dataset/algorithm order
-    order_ds = {"SMALL": 1, "MEDIUM": 2, "LARGE": 3, "XLARGE": 4}
+    order_ds = {"SMALL": 1, "MEDIUM": 2, "LARGE": 3}
     order_algo = {"GREEDY": 1, "MRV": 2, "BNB": 3, "PBNB": 4}
 
     result = list(dedup_map.values())
@@ -522,8 +522,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
 
             # Whitelist validations
-            if size not in ("SMALL", "MEDIUM", "LARGE", "XLARGE"):
-                self.send_error_json("Invalid size. Must be SMALL, MEDIUM, LARGE, or XLARGE",
+            if size not in ("SMALL", "MEDIUM", "LARGE"):
+                self.send_error_json("Invalid size. Must be SMALL, MEDIUM, or LARGE",
                                      HTTPStatus.BAD_REQUEST)
                 return
             if algo not in ("greedy", "mrv", "bnb", "pbnb"):
@@ -592,7 +592,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 self.send_error_json("Invalid timeLimitMs", HTTPStatus.BAD_REQUEST)
                 return
 
-            if size not in ("SMALL", "MEDIUM", "LARGE", "XLARGE"):
+            if size not in ("SMALL", "MEDIUM", "LARGE"):
                 self.send_error_json("Invalid size", HTTPStatus.BAD_REQUEST)
                 return
             if not isinstance(thread_list, list) or not thread_list:
