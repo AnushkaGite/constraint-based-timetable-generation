@@ -2,10 +2,10 @@
 
 ## 1. Purpose
 
-One CSV, **input data only** (no timetable, no solution, no results). Your C++17/20 program loads the rows for one `dataset_size`, derives the conflict graph itself, and runs Greedy → MRV → Backtracking → Pruning → Branch & Bound, sequentially and with OpenMP, at four problem sizes.
+One CSV, **input data only** (no timetable, no solution, no results). Your C++17/20 program loads the rows for one `dataset_size`, derives the conflict graph itself, and runs Greedy → MRV → Backtracking → Pruning → Branch & Bound, sequentially and with OpenMP, at three problem sizes.
 
 **One row = one course taught to one batch.**
-185 rows total: SMALL 10, MEDIUM 25, LARGE 50, XLARGE 100.
+85 rows total: SMALL 10, MEDIUM 25, LARGE 50.
 
 ## 2. Time grid (fixed, not in the CSV)
 
@@ -16,8 +16,8 @@ Theory = 1 slot. Lab = 2 consecutive slots. **Valid lab start slots are 1, 2, 3,
 
 | Column | Meaning |
 |---|---|
-| `dataset_size` | `SMALL`, `MEDIUM`, `LARGE` or `XLARGE`. Filter on this to load one problem. |
-| `course_id` | Unique row key (`SM-001`, `MD-001`, `LG-001`, `XL-001`…). One course-for-one-batch. |
+| `dataset_size` | `SMALL`, `MEDIUM` or `LARGE`. Filter on this to load one problem. |
+| `course_id` | Unique row key (`SM-001`, `MD-001`, `LG-001`…). One course-for-one-batch. |
 | `course_name` | Subject name (for reporting only). |
 | `course_type` | `THEORY` or `LAB`. |
 | `faculty_id` | Teacher (`F01`…). Reused across many rows; creates faculty conflicts. |
@@ -34,19 +34,19 @@ Faculty and batch attributes are **denormalised**: every row with the same `facu
 
 ## 4. Dataset sizes
 
-| | SMALL | MEDIUM | LARGE | XLARGE |
+| | SMALL | MEDIUM | LARGE |
 |---|---|---|---|---|
-| Courses (rows) | 10 | 25 | 50 | 100 |
-| Batches | 3 | 5 | 8 | 15 |
-| Faculty | 6 | 10 | 20 | 40 |
-| Rooms (theory + lab) | 5 (3+2) | 8 (6+2) | 12 (9+3) | 20 (16+4) |
-| Labs | 3 (30%) | 6 (24%) | 13 (26%) | 25 (25%) |
-| Sessions to place | 33 | 84 | 161 | 322 |
-| Slot-units (sessions × duration) | 39 | 96 | 186 | 365 |
-| Avg batch load (of its free slots) | 39% | 58% | 68% | 74% |
-| Graph edges (same batch or same faculty) | 15 | 72 | 177 | 390 |
-| Graph degree (min / mean / max) | 2 / 3.0 / 4 | 4 / 5.8 / 8 | 5 / 7.1 / 10 | 5 / 7.8 / 11 |
-| Graph density | 0.33 | 0.24 | 0.14 | 0.08 |
+| Courses (rows) | 10 | 25 | 50 |
+| Batches | 3 | 5 | 8 |
+| Faculty | 6 | 10 | 20 |
+| Rooms (theory + lab) | 5 (3+2) | 8 (6+2) | 12 (9+3) |
+| Labs | 3 (30%) | 6 (24%) | 13 (26%) |
+| Sessions to place | 33 | 84 | 161 |
+| Slot-units (sessions × duration) | 39 | 96 | 186 |
+| Avg batch load (of its free slots) | 39% | 58% | 68% |
+| Graph edges (same batch or same faculty) | 15 | 72 | 177 |
+| Graph degree (min / mean / max) | 2 / 3.0 / 4 | 4 / 5.8 / 8 | 5 / 7.1 / 10 |
+| Graph density | 0.33 | 0.24 | 0.14 |
 
 Difficulty comes from: more sessions, shared faculty (workloads from 1 to 6 courses each), shared batches, big batches that fit only a few rooms, few lab rooms, faculty/batch unavailability, and labs needing two free consecutive slots at valid starts. Note that room scarcity makes the search harder through the *constraint checker*, not through extra graph edges (see §7). Faculty unavailability: about half have none, some have 2–4 slots, a few have 6–9.
 
@@ -55,7 +55,6 @@ Room inventory (capacity), all `R##` = THEORY, `L##` = LAB:
 - SMALL: R01 60, R02 60, R03 50 · L01 60, L02 50
 - MEDIUM: R01 90, R02 60, R03 60, R04 50, R05 50, R06 40 · L01 70, L02 50
 - LARGE: R01 100, R02 90, R03–R05 60, R06–R07 50, R08–R09 40 · L01 70, L02 60, L03 40
-- XLARGE: R01 120, R02 100, R03 90, R04 80, R05–R08 60, R09–R12 50, R13–R16 40 · L01 80, L02 70, L03 60, L04 50
 
 You do not need this list; everything is also encoded in `room_options`.
 
@@ -113,8 +112,8 @@ MRV domain size = remaining valid `(time, room)` pairs for the session. Course d
 
 ## 8. Feasibility and difficulty checks performed
 
-- Every size was solved by a separate search that checks all hard constraints of §7.2 (the room, availability and lab checks are done on actual sessions, not through graph edges); the resulting timetables were re-verified against the parsed CSV (no double-booking, unavailability respected, capacity/type, lab start slots, session counts). So **all four sizes have at least one feasible timetable.**
-- A naive first-fit greedy (no backtracking) leaves sessions unplaced: MEDIUM 2, LARGE 9, XLARGE 14 (SMALL 0). A dynamic-MRV greedy still fails on LARGE (2) and XLARGE (6). LARGE and XLARGE needed genuine backtracking/restarts to find a full timetable, while SMALL is solved without any backtracking.
-- Other checks: IDs are consistent, faculty/batch attributes are identical on every row that shares an ID, every faculty teaches at least one course, durations and session counts are valid, theory rows only list theory rooms and labs only lab rooms, and the batch/faculty conflict graph is sparse (density 0.33 down to 0.08), is not complete, and its vertex degrees spread over a range (for example 5–11 in XLARGE), with low-degree courses (single-course faculty) and higher-degree ones (heavily loaded faculty in larger batches).
+- Every size is checked against all hard constraints of §7.2 (room, availability and lab checks are done on actual sessions, not through graph edges); resulting timetables are re-verified against the parsed CSV (no double-booking, unavailability respected, capacity/type, lab start slots, session counts). So **all three sizes have at least one feasible timetable.**
+- A naive first-fit greedy (no backtracking) leaves sessions unplaced: MEDIUM 2 and LARGE 9 (SMALL 0). A dynamic-MRV greedy still fails on LARGE (2). LARGE needed genuine backtracking/restarts to find a full timetable, while SMALL is solved without any backtracking.
+- Other checks: IDs are consistent, faculty/batch attributes are identical on every row that shares an ID, every faculty teaches at least one course, durations and session counts are valid, theory rows only list theory rooms and labs only lab rooms, and the batch/faculty conflict graph is sparse (density 0.14–0.33), is not complete, and its vertex degrees spread over a range, with low-degree courses (single-course faculty) and higher-degree ones (heavily loaded faculty in larger batches).
 - The feasibility and greedy-failure results do not depend on how the graph is defined, so the room-edge correction did not change them.
 - Limits: the dataset is tuned for feasibility plus hardness, not proven hardest. If you change the load (more sessions or fewer rooms), re-check feasibility.

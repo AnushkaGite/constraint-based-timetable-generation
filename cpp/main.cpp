@@ -149,11 +149,26 @@ static RunRow runMRVOne(const std::string& size,
     std::vector<Session> sessions;
     MRVResult res = runMRV(courses, graph, courseMap, sessions, timeLimitMs);
 
+    bool usedGreedyFallback = false;
+    if (!res.feasible) {
+        std::vector<Session> greedySessions;
+        GreedyResult greedyRes = runGreedy(courses, graph, courseMap, greedySessions);
+        sessions = std::move(greedySessions);
+        res.scheduled = greedyRes.scheduled;
+        res.unscheduled = greedyRes.unscheduled;
+        res.feasible = (greedyRes.unscheduled == 0);
+        res.totalPenalty = res.feasible ? greedyRes.totalPenalty : 0;
+        usedGreedyFallback = true;
+    }
+
     ValidationReport report = validateTimetable(sessions, courseMap);
     bool feasible = res.feasible && report.feasible;
 
     if (!quiet) {
         printMRVStats(size, courses, res, report);
+        if (usedGreedyFallback)
+            std::cout << "  [NOTE] Search did not find a complete timetable; "
+                         "showing the Greedy schedule, which may be partial.\n";
         if (printTable) printTimetable(sessions, courseMap);
     }
 
@@ -168,6 +183,7 @@ static RunRow runMRVOne(const std::string& size,
     row.attempts   = res.attemptsCount;
     row.penalty    = feasible ? res.totalPenalty : -1;
     row.unscheduled   = res.unscheduled;
+    row.usedGreedyFallback = usedGreedyFallback;
     row.timeLimitMs   = timeLimitMs;
     row.validation    = report;
     row.sessionsData  = sessions;
@@ -217,15 +233,14 @@ static RunRow runBnBOne(const std::string& size,
         2000000000,  // always store first solution found, then improve
         timeLimitMs);
 
-    // If B&B found no solution at all, fall back to the Greedy solution
-    // so we always have a complete feasible timetable to validate.
+    // Preserve the best available schedule when search finds no complete one.
     bool usedGreedyFallback = false;
-    if (!res.feasible && grRes.unscheduled == 0) {
+    if (!res.feasible) {
         sessions           = greedySessions;
-        res.bestCost       = greedyPenalty;
-        res.feasible       = true;
+        res.bestCost       = (grRes.unscheduled == 0) ? grRes.totalPenalty : -1;
+        res.feasible       = (grRes.unscheduled == 0);
         res.scheduled      = grRes.scheduled;
-        res.unscheduled    = 0;
+        res.unscheduled    = grRes.unscheduled;
         usedGreedyFallback = true;
     }
 
@@ -236,8 +251,8 @@ static RunRow runBnBOne(const std::string& size,
         int gpForPrint = usedGreedyFallback ? -1 : (int)greedyPenalty;
         printBnBStats(size, courses, res, report, gpForPrint);
         if (usedGreedyFallback)
-            std::cout << "  [NOTE] B&B found no improvement over Greedy; "
-                         "Greedy solution is shown.\n";
+            std::cout << "  [NOTE] Search did not find a complete timetable; "
+                         "showing the Greedy schedule, which may be partial.\n";
         if (printTable) printTimetable(sessions, courseMap);
     }
 
@@ -292,11 +307,26 @@ static RunRow runPBnBOne(const std::string& size,
         2000000000,   // always store first solution found, then improve
         timeLimitMs);
 
+    bool usedGreedyFallback = false;
+    if (!res.feasible) {
+        std::vector<Session> greedySessions;
+        GreedyResult greedyRes = runGreedy(courses, graph, courseMap, greedySessions);
+        sessions = std::move(greedySessions);
+        res.scheduled = greedyRes.scheduled;
+        res.unscheduled = greedyRes.unscheduled;
+        res.feasible = (greedyRes.unscheduled == 0);
+        res.bestCost = res.feasible ? greedyRes.totalPenalty : -1;
+        usedGreedyFallback = true;
+    }
+
     ValidationReport report = validateTimetable(sessions, courseMap);
     bool feasible = res.feasible && report.feasible;
 
     if (!quiet) {
         printPBnBStats(size, courses, res, report);
+        if (usedGreedyFallback)
+            std::cout << "  [NOTE] Search did not find a complete timetable; "
+                         "showing the Greedy schedule, which may be partial.\n";
         if (printTable) printTimetable(sessions, courseMap);
     }
 
@@ -314,6 +344,7 @@ static RunRow runPBnBOne(const std::string& size,
     row.threads    = (res.threadsUsed > 0) ? res.threadsUsed : (numThreads > 0 ? numThreads : 1);
     row.parMs      = res.elapsedMs;
     row.unscheduled   = res.unscheduled;
+    row.usedGreedyFallback = usedGreedyFallback;
     row.timeLimitMs   = timeLimitMs;
     row.validation    = report;
     row.sessionsData  = sessions;
@@ -746,14 +777,14 @@ static void printUsage(const char* prog)
 {
     std::cerr << "Usage (single algorithm):\n"
               << "  " << prog
-              << " <SMALL|MEDIUM|LARGE|XLARGE|ALL>"
+              << " <SMALL|MEDIUM|LARGE|ALL>"
               << " [--algo greedy|mrv|bnb|pbnb]"
               << " [--time-limit <ms>] [--threads <n>] [--csv <file>] [--export-json <file>]\n"
               << "  Default algo  : mrv\n"
               << "  Default limit : 60000 ms per dataset size\n\n"
               << "Usage (unified benchmark):\n"
-              << "  " << prog << " --benchmark [SMALL] [MEDIUM] [LARGE] [XLARGE]\n"
-              << "  (no sizes = run all four sizes)\n"
+              << "  " << prog << " --benchmark [SMALL] [MEDIUM] [LARGE]\n"
+              << "  (no sizes = run all three sizes)\n"
               << "  [--threads <n>]     default 4\n"
               << "  [--time-limit <ms>] set limit for all algorithms\n"
               << "  [--mrv-limit <ms>]  default 60000\n"
@@ -773,8 +804,8 @@ int main(int argc, char* argv[])
     bool isBenchmark = (std::string(argv[1]) == "--benchmark");
 
     if (isBenchmark) {
-        // Collect optional size args after --benchmark; default = all four
-        const std::vector<std::string> allSizes = {"SMALL","MEDIUM","LARGE","XLARGE"};
+        // Collect optional size args after --benchmark; default = all three
+        const std::vector<std::string> allSizes = {"SMALL","MEDIUM","LARGE"};
         std::vector<std::string> benchSizes;
         double mrvLimitMs  = 60000.0;
         double bnbLimitMs  = 30000.0;
@@ -784,7 +815,7 @@ int main(int argc, char* argv[])
 
         for (int i = 2; i < argc; ++i) {
             std::string a = toUpper(argv[i]);
-            if (a == "SMALL" || a == "MEDIUM" || a == "LARGE" || a == "XLARGE") {
+            if (a == "SMALL" || a == "MEDIUM" || a == "LARGE") {
                 benchSizes.push_back(a);
             } else if (a == "--THREADS" && i + 1 < argc) {
                 try { threads = std::stoi(argv[++i]); } catch (...) {}
@@ -863,9 +894,9 @@ int main(int argc, char* argv[])
 
     std::vector<std::string> sizes;
     if (sizeArg == "ALL") {
-        sizes = {"SMALL","MEDIUM","LARGE","XLARGE"};
+        sizes = {"SMALL","MEDIUM","LARGE"};
     } else if (sizeArg == "SMALL" || sizeArg == "MEDIUM" ||
-               sizeArg == "LARGE" || sizeArg == "XLARGE") {
+               sizeArg == "LARGE") {
         sizes = {sizeArg};
     } else {
         printUsage(argv[0]); return 1;

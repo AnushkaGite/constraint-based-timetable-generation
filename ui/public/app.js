@@ -724,18 +724,6 @@ async function loadBenchmarks() {
     const data = await res.json();
     state.benchData = data;
 
-    // Check if XLARGE has data
-    const hasXlarge = data.some(r => r.dataset === 'XLARGE');
-    const btnXlarge = document.querySelector('#benchSizeFilters button[data-size="XLARGE"]');
-    if (btnXlarge) {
-      if (hasXlarge) {
-        btnXlarge.classList.remove('btn-disabled');
-        btnXlarge.innerHTML = 'XLARGE (322)';
-      } else {
-        btnXlarge.classList.add('btn-disabled');
-      }
-    }
-
     renderBenchmarkCharts();
     renderBenchmarkTable();
   } catch (err) {
@@ -772,7 +760,6 @@ function renderBenchmarkCharts() {
   };
 
   const sizes = ['SMALL', 'MEDIUM', 'LARGE'];
-  if (data.some(r => r.dataset === 'XLARGE')) sizes.push('XLARGE');
 
   const algos = ['GREEDY', 'MRV', 'BNB', 'PBNB'];
 
